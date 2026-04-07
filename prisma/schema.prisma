@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ConversationStatus {
+  ACTIVE
+  CLOSED
+  HANDED_OFF
+}
+
+model User {
+  id            String         @id @default(cuid())
+  externalId    String
+  channel       String
+  displayName   String?
+  language      String         @default("ru")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  conversations Conversation[]
+
+  @@unique([channel, externalId])
+}
+
+model Conversation {
+  id         String             @id @default(cuid())
+  userId     String
+  status     ConversationStatus @default(ACTIVE)
+  stage      String             @default("contact")
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages   Message[]
+  leadState  LeadState?
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           String
+  text           String
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
+
+model LeadState {
+  id             String       @id @default(cuid())
+  conversationId String       @unique
+  need           String?
+  budget         String?
+  deadline       String?
+  nextAction     String?
+  updatedAt      DateTime     @updatedAt
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
+
+model HandoffEvent {
+  id             String   @id @default(cuid())
+  conversationId String
+  reason         String
+  createdAt      DateTime @default(now())
+}
+
+model ProcessedInboundMessage {
+  id                String   @id @default(cuid())
+  channel           String
+  externalMessageId String
+  createdAt         DateTime @default(now())
+
+  @@unique([channel, externalMessageId])
+}

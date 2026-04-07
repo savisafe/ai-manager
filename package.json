@@ -1,0 +1,41 @@
+{
+  "name": "ai-manager",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "start:dev": "ts-node src/main.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "telegram:webhook:set": "node scripts/telegram-webhook.mjs set",
+    "telegram:webhook:info": "node scripts/telegram-webhook.mjs info",
+    "telegram:webhook:delete": "node scripts/telegram-webhook.mjs delete"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@nestjs/common": "^11.1.18",
+    "@nestjs/core": "^11.1.18",
+    "@nestjs/platform-express": "^11.1.18",
+    "@prisma/client": "^6.19.3",
+    "bullmq": "^5.73.0",
+    "dotenv": "^17.4.1",
+    "ioredis": "^5.10.1",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.2",
+    "prisma": "^6.19.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}
