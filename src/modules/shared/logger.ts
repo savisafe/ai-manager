@@ -1,7 +1,11 @@
-import { ConsoleLogger } from "@nestjs/common";
+import { ConsoleLogger, LogLevel } from "@nestjs/common";
 
 export class Logger extends ConsoleLogger {
   constructor() {
-    super("AIManager");
+    const isProd = process.env.NODE_ENV === "production";
+    const logLevels: LogLevel[] = isProd
+      ? ["error", "warn", "log"]
+      : ["error", "warn", "log", "debug", "verbose"];
+    super("AIManager", { logLevels });
   }
 }

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { performance } from "node:perf_hooks";
 import { DialogService } from "../dialog/dialog.service";
+import { DialogOutput } from "../dialog/dialog.types";
 import { IdempotencyService } from "../idempotency/idempotency.service";
 import { isDevelopment } from "../shared/is-development";
 import {
@@ -58,11 +59,17 @@ export class TelegramService {
     }
 
     const dialogStarted = dev ? performance.now() : 0;
-    const result = await this.dialogService.process({
-      channel: "telegram",
-      externalUserId: String(message.chatId),
-      text: message.text,
-    });
+    const stopTyping = this.startTypingIndicator(message.chatId);
+    let result: DialogOutput;
+    try {
+      result = await this.dialogService.process({
+        channel: "telegram",
+        externalUserId: String(message.chatId),
+        text: message.text,
+      });
+    } finally {
+      stopTyping();
+    }
     if (dev) {
       const dialogMs = Math.round(performance.now() - dialogStarted);
       this.logger.log(
@@ -106,5 +113,41 @@ export class TelegramService {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Показывает в чате статус «печатает…» на время обработки.
+   * Telegram сбрасывает индикатор ~за 5 с, поэтому обновляем периодически.
+   */
+  private startTypingIndicator(chatId: number): () => void {
+    void this.sendChatAction(chatId, "typing");
+    const intervalMs = 4000;
+    const timer = setInterval(() => {
+      void this.sendChatAction(chatId, "typing");
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }
+
+  private async sendChatAction(chatId: number, action: string): Promise<void> {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      return;
+    }
+    const url = `https://api.telegram.org/bot${token}/sendChatAction`;
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, action }),
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        this.logger.verbose(`Telegram sendChatAction failed: ${response.status} ${errText}`);
+      }
+    } catch (e) {
+      this.logger.verbose(
+        `Telegram sendChatAction error: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 }

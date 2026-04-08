@@ -44,6 +44,15 @@ export class LlmService {
         body.max_tokens = maxTokens;
       }
 
+      if (this.shouldLogLlmDev()) {
+        const payload = this.formatMessagesForDevLog(messages);
+        this.logger.debug(
+          `LLM → ${url} model=${model} messages=${messages.length} temperature=${body.temperature}` +
+            (body.max_tokens != null ? ` max_tokens=${body.max_tokens}` : "") +
+            `\n${JSON.stringify(payload, null, 2)}`,
+        );
+      }
+
       const timeoutRaw = process.env.LLM_TIMEOUT_MS?.trim();
       const timeoutMs =
         timeoutRaw !== undefined && timeoutRaw !== "" ? Number(timeoutRaw) : 0;
@@ -72,6 +81,10 @@ export class LlmService {
         choices?: Array<{ message?: { content?: string } }>;
       };
       const text = data.choices?.[0]?.message?.content?.trim();
+      if (this.shouldLogLlmDev() && text) {
+        const preview = text.length > 500 ? `${text.slice(0, 500)}… (${text.length} chars)` : text;
+        this.logger.debug(`LLM ← reply preview:\n${preview}`);
+      }
       return text && text.length > 0 ? text : null;
     } catch (error) {
       const name = error instanceof Error ? error.name : "";
@@ -82,5 +95,26 @@ export class LlmService {
       }
       return null;
     }
+  }
+
+  private shouldLogLlmDev(): boolean {
+    return process.env.NODE_ENV !== "production";
+  }
+
+  private formatMessagesForDevLog(messages: LlmChatMessage[]): Array<{ role: string; content: string }> {
+    const raw = process.env.LLM_DEV_LOG_TRUNCATE?.trim();
+    const limit =
+      raw === undefined || raw === "" ? 4000 : raw === "0" ? 0 : Number(raw);
+    const max = Number.isFinite(limit) && limit >= 0 ? limit : 4000;
+
+    return messages.map((m) => {
+      if (max === 0 || m.content.length <= max) {
+        return { role: m.role, content: m.content };
+      }
+      return {
+        role: m.role,
+        content: `${m.content.slice(0, max)}… (truncated, ${m.content.length} chars total)`,
+      };
+    });
   }
 }
