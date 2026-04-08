@@ -3,13 +3,14 @@
 ## Project
 - Name: `ai-manager`
 - Goal: AI-менеджер для консультаций и продаж в чатах (Telegram, WhatsApp, др.)
-- Current stage: Инициализация проекта
+- Current stage: MVP core (синхронная обработка webhook; очередь — в планах)
 
 ## Implemented
 - Создан документ `PROMPT_PLAN.md` с базовой архитектурой промпта и планом итераций.
 - Зафиксирован целевой технологический стек (см. `TECH_STACK.md`).
 - Инициализирован backend-каркас (NestJS + TypeScript).
 - Добавлены `docker-compose.yml` (PostgreSQL + Redis) и `prisma/schema.prisma`.
+- Redis поднят в Compose; в `package.json` добавлены `bullmq` и `ioredis` — **очередь в Nest-приложении пока не подключена**, вебхуки обрабатывают диалог синхронно.
 - Добавлен WhatsApp webhook модуль (`GET` verify + `POST` receive/send text).
 - Добавлен Telegram webhook модуль (`POST` receive/send text).
 - Добавлены команды управления Telegram webhook и `.gitignore` для защиты `.env`.
@@ -32,12 +33,14 @@
 - Уточнение sales-FSM логики и A/B вариантов скриптов.
 
 ## Next
-1. Добавить Redis + очередь задач для асинхронной обработки.
+1. Подключить BullMQ: постановка job из webhook, worker с вызовом `DialogService`, быстрый ACK провайдеру (сохранить idempotency на входе).
 2. Настроить Telegram/WhatsApp production webhook URLs.
 3. Добавить A/B варианты sales-скриптов в конфиг.
 4. Добавить уведомление менеджера при handoff событии.
 5. Добавить retry/backoff для неуспешной отправки сообщений в каналы.
 6. Добавить базовые метрики конверсии по этапам воронки.
+
+Дорожная карта по фазам: [`ROADMAP.md`](ROADMAP.md).
 
 ## Architecture Decisions
 - Единый слой каналов: адаптеры для каждого мессенджера.
@@ -46,7 +49,7 @@
 - Рамка LLM (компания, тема, запреты, опциональный `scopeFile`) — сменные файлы-профили в `config/prompt-profiles/`, не переменные окружения с длинным текстом; `.env` задаёт только идентификатор профиля.
 - Основной backend: NestJS (TypeScript), REST + webhook endpoints.
 - Хранение состояния и истории: PostgreSQL (через Prisma ORM).
-- Очереди и кэш: Redis + BullMQ.
+- Очереди и кэш: целевой стек — Redis + BullMQ; **сейчас** Redis в Docker и npm-зависимости готовы, использование очереди в коде — следующий шаг (см. Next п.1 и `ROADMAP.md`, фаза A).
 
 ## Risks / Open Questions
 - Выбор провайдера для WhatsApp (официальный API vs BSP).
@@ -55,6 +58,8 @@
 - Выбор финального поставщика LLM и политика контроля затрат.
 
 ## Change Log
+- 2026-04-09: План развития вынесен в `docs/ROADMAP.md`; в контексте — ссылка после блока Next.
+- 2026-04-09: Уточнён статус Redis/BullMQ (инфра + зависимости без воркера); добавлен черновик «План развития»; обновлён Next п.1; стадия проекта в шапке.
 - 2026-04-09: Добавлен `docs/BOT_ALGORITHM.md` — алгоритм работы бота и роль таблиц БД; ссылка в `README.md`.
 - 2026-04-09: Учтены `LLM_CONTEXT_MESSAGES` и `LLM_TIMEOUT_MS` в `DialogService` / `LlmService`; в README — подсказки по ускорению LLM.
 - 2026-04-09: Логи обработки входящих сообщений Telegram/WhatsApp (этапы и тайминги) включены только в dev (`NODE_ENV=development`).

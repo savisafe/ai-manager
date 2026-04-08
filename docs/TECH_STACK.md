@@ -12,15 +12,15 @@
 - Framework: `NestJS`
 - Database: `PostgreSQL`
 - ORM: `Prisma`
-- Cache/Queue: `Redis` + `BullMQ`
-- Logging: `Pino`
+- Cache/Queue: `Redis` + `BullMQ` (цель). **Сейчас:** Redis в `docker-compose.yml`, пакеты `ioredis` и `bullmq` в проекте; воркер очереди в приложении ещё не подключён — обработка вебхуков синхронная.
+- Logging: `Pino` (в зависимостях; в коде также Nest `Logger`)
 - Errors/Observability: `Sentry` (опционально на MVP)
 - Containerization: `Docker` + `Docker Compose`
 
 ## 3) Канальные интеграции
 ### Telegram
-- `Telegraf` или прямой Telegram Bot API через NestJS adapter.
-- Режимы: webhook (prod), polling (local dev).
+- В репозитории: прямой вызов Telegram Bot API из NestJS-модуля. `Telegraf` — возможная замена, не обязательна.
+- Режимы: webhook (prod), polling (local dev) — при необходимости.
 
 ### WhatsApp
 - BSP-провайдер через официальный WhatsApp Business API (рекомендуется `360dialog`).
@@ -31,9 +31,9 @@
 - Единая модель входящих сообщений и метаданных.
 
 ## 4) AI/LLM слой
-- Провайдер: `OpenAI API` (через абстракцию `LLMProvider`).
-- Промпты и сценарии: в versioned md/json конфигурации.
-- Защита: валидация ответов, fallback-шаблоны, hand-off к человеку.
+- Вызов: OpenAI-совместимый HTTP API (`LlmService`); на MVP удобно `Ollama` (`/v1/chat/completions`). Абстракция нескольких провайдеров (`LLMProvider`) — целевое развитие.
+- Промпты и сценарии: JSON-профили в `config/prompt-profiles/`, скрипты в `scripts/sales-scripts.json`.
+- Защита: fallback на шаблоны скрипта, hand-off к человеку; расширенная пост-валидация ответа LLM — в планах.
 
 ## 5) Хранение данных (MVP)
 - `users` — клиентские профили.
@@ -43,20 +43,16 @@
 - `handoff_events` — передачи менеджеру-человеку.
 
 ## 6) Базовая структура модулей
-- `apps/api` — вебхуки, REST, healthcheck.
-- `modules/channel` — адаптеры Telegram/WhatsApp.
-- `modules/dialog` — FSM и сценарии продаж.
-- `modules/llm` — генерация ответов и guardrails.
-- `modules/crm` — лиды, статусы, метрики.
-- `modules/shared` — типы, utils, конфиг.
+- **Фактически:** монолитный Nest-проект, `src/modules/*` (health, telegram, whatsapp, dialog, llm, prisma, idempotency, prompt-profile, shared).
+- **Целевое разбиение (можно эволюционно приблизить):** `apps/api` или тот же корень; `channel` — единый адаптер; `dialog`; `llm`; `crm` — лиды и метрики (пока данные в Prisma без отдельного CRM-модуля).
 
 ## 7) Минимальные npm зависимости
 - `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express`
-- `telegraf`
 - `prisma`, `@prisma/client`
 - `ioredis`, `bullmq`
 - `pino`, `pino-http`
-- `zod` (валидация данных и конфигов)
+- `zod` (в проекте есть; валидация JSON-конфигов при старте — рекомендуется добавить)
+- Опционально: `telegraf` при переходе на него для Telegram
 
 ## 8) Нефункциональные требования
 - SLA ответа бота: до 3 сек (95p на MVP).
