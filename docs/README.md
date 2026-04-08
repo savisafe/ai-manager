@@ -2,7 +2,7 @@
 
 Backend для AI-менеджера в чатах: **Telegram** и **WhatsApp** (webhook), общая диалоговая логика, скрипты продаж из JSON, сохранение истории в **PostgreSQL**, опционально **локальная LLM через Ollama**.
 
-Подробности промпта и плана развития: [PROMPT_PLAN.md](./PROMPT_PLAN.md). Текущий статус разработки: [DEVELOPMENT_CONTEXT.md](./DEVELOPMENT_CONTEXT.md).
+Подробности промпта и плана развития: [PROMPT_PLAN.md](PROMPT_PLAN.md). Текущий статус разработки: [DEVELOPMENT_CONTEXT.md](DEVELOPMENT_CONTEXT.md).
 
 ---
 
@@ -202,18 +202,15 @@ LLM_TEMPERATURE=0.35
 LLM_MAX_TOKENS=400
 ```
 
-4. Рамка темы и запреты (рекомендуется):
+4. Профиль промпта (рамка темы, запреты, компания) — **не в `.env`**, а в JSON-модулях [config/prompt-profiles/](./config/prompt-profiles/):
 
-```env
-COMPANY_NAME=Название компании
-LLM_TOPIC=Кратко: о чём можно говорить в чате
-LLM_FORBIDDEN_TOPICS=политика,религия,...
-# LLM_SCOPE_FILE=config/llm-scope.txt
-```
+- По умолчанию: `LLM_PROMPT_PROFILE=default` → файл `config/prompt-profiles/default.json`.
+- Другая задача/бренд: скопируй `default.json` в новый файл (например `acme-sales.json`) и в `.env` укажи `LLM_PROMPT_PROFILE=acme-sales`.
+- Длинные факты о продукте: поле `"scopeFile": "config/llm-scope.txt"` в JSON профиля; шаблон текста: [config/llm-scope.example.txt](../config/llm-scope.example.txt).
 
-Шаблон текста для scope: [config/llm-scope.example.txt](./config/llm-scope.example.txt).
+Пример второго профиля без scope-файла: `config/prompt-profiles/minimal.json` → `LLM_PROMPT_PROFILE=minimal`.
 
-Если `LLM_ENABLED=false` или Ollama недоступна, ответы идут из шаблонов в [scripts/sales-scripts.json](./scripts/sales-scripts.json).
+Если `LLM_ENABLED=false` или Ollama недоступна, ответы идут из шаблонов в [scripts/sales-scripts.json](../scripts/sales-scripts.json).
 
 Сообщение `listen tcp 127.0.0.1:11434: address already in use` означает, что Ollama **уже запущена** — второй раз `ollama serve` не нужен.
 
@@ -256,6 +253,7 @@ LLM_FORBIDDEN_TOPICS=политика,религия,...
 | Сменился URL ngrok | Обновить `TELEGRAM_WEBHOOK_URL` и снова `npm run telegram:webhook:set` |
 | Ollama: `models: []` | Выполнить `ollama pull <модель>` |
 | Ответы «шаблонные», не LLM | `LLM_ENABLED=true`, верный `LLM_MODEL`, Ollama доступна с машины, где крутится Node |
+| Долгий этап `2/3 dialog` (десятки секунд) | Локальный инференс: меньшая модель (`LLM_MODEL`, напр. `llama3.2:3b`), GPU/Metal у Ollama, меньше `LLM_MAX_TOKENS`, меньше `LLM_CONTEXT_MESSAGES`, короче системный промпт/`scopeFile`; облачный API быстрее CPU |
 | Ошибки БД | `docker compose up -d postgres`, корректный `DATABASE_URL`, выполнены миграции |
 
 ---
@@ -272,6 +270,7 @@ docker compose up -d redis
 
 ## Документы проекта
 
-- [PROMPT_PLAN.md](./PROMPT_PLAN.md) — роль бота, промпт, скрипты, KPI
-- [TECH_STACK.md](./TECH_STACK.md) — стек и архитектура
-- [DEVELOPMENT_CONTEXT.md](./DEVELOPMENT_CONTEXT.md) — что сделано и что дальше
+- [docs/BOT_ALGORITHM.md](BOT_ALGORITHM.md) — алгоритм от сообщения пользователя до ответа (webhook, БД, LLM)
+- [PROMPT_PLAN.md](PROMPT_PLAN.md) — роль бота, промпт, скрипты, KPI
+- [TECH_STACK.md](TECH_STACK.md) — стек и архитектура
+- [DEVELOPMENT_CONTEXT.md](DEVELOPMENT_CONTEXT.md) — что сделано и что дальше

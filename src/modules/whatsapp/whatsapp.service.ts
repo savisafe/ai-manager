@@ -1,7 +1,9 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { DialogService } from "../dialog/dialog.service";
 import { IdempotencyService } from "../idempotency/idempotency.service";
+import { isDevelopment } from "../shared/is-development";
 import {
   IncomingWhatsAppMessage,
   WhatsAppWebhookPayload,
@@ -92,23 +94,48 @@ export class WhatsAppService {
         continue;
       }
 
-      this.logger.log(`Incoming WhatsApp message from ${message.from}: ${message.text}`);
+      const dev = isDevelopment();
+      const preview =
+        message.text.length > 120 ? `${message.text.slice(0, 120)}…` : message.text;
+      const flowStarted = dev ? performance.now() : 0;
+      if (dev) {
+        this.logger.log(
+          `[WhatsApp] 1/3 received from=${message.from} messageId=${message.messageId ?? "n/a"}: ${preview}`,
+        );
+      }
+
+      const dialogStarted = dev ? performance.now() : 0;
       const result = await this.dialogService.process({
         channel: "whatsapp",
         externalUserId: message.from,
         text: message.text,
       });
-      await this.sendTextMessage(message.from, result.replyText);
+      if (dev) {
+        const dialogMs = Math.round(performance.now() - dialogStarted);
+        this.logger.log(
+          `[WhatsApp] 2/3 dialog done from=${message.from} stage=${result.stage} in ${dialogMs}ms`,
+        );
+      }
+
+      const sendStarted = dev ? performance.now() : 0;
+      const sent = await this.sendTextMessage(message.from, result.replyText);
+      if (dev) {
+        const sendMs = Math.round(performance.now() - sendStarted);
+        const totalMs = Math.round(performance.now() - flowStarted);
+        this.logger.log(
+          `[WhatsApp] 3/3 ${sent ? "reply sent to user" : "reply NOT sent (see errors above)"} to=${message.from} in ${sendMs}ms | total ${totalMs}ms (webhook → user sees message)`,
+        );
+      }
     }
   }
 
-  async sendTextMessage(to: string, body: string): Promise<void> {
+  async sendTextMessage(to: string, body: string): Promise<boolean> {
     const token = process.env.WHATSAPP_ACCESS_TOKEN;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
     if (!token || !phoneNumberId) {
       this.logger.warn("WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID is not set");
-      return;
+      return false;
     }
 
     const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
@@ -130,6 +157,8 @@ export class WhatsAppService {
     if (!response.ok) {
       const errText = await response.text();
       this.logger.error(`WhatsApp send failed: ${response.status} ${errText}`);
+      return false;
     }
+    return true;
   }
 }

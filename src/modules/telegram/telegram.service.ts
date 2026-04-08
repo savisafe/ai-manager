@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { performance } from "node:perf_hooks";
 import { DialogService } from "../dialog/dialog.service";
 import { IdempotencyService } from "../idempotency/idempotency.service";
+import { isDevelopment } from "../shared/is-development";
 import {
   IncomingTelegramMessage,
   TelegramWebhookPayload,
@@ -45,20 +47,45 @@ export class TelegramService {
       return;
     }
 
-    this.logger.log(`Incoming Telegram message from ${message.chatId}: ${message.text}`);
+    const dev = isDevelopment();
+    const preview =
+      message.text.length > 120 ? `${message.text.slice(0, 120)}…` : message.text;
+    const flowStarted = dev ? performance.now() : 0;
+    if (dev) {
+      this.logger.log(
+        `[Telegram] 1/3 received chatId=${message.chatId} messageId=${message.messageId ?? "n/a"}: ${preview}`,
+      );
+    }
+
+    const dialogStarted = dev ? performance.now() : 0;
     const result = await this.dialogService.process({
       channel: "telegram",
       externalUserId: String(message.chatId),
       text: message.text,
     });
-    await this.sendMessage(message.chatId, result.replyText);
+    if (dev) {
+      const dialogMs = Math.round(performance.now() - dialogStarted);
+      this.logger.log(
+        `[Telegram] 2/3 dialog done chatId=${message.chatId} stage=${result.stage} in ${dialogMs}ms`,
+      );
+    }
+
+    const sendStarted = dev ? performance.now() : 0;
+    const sent = await this.sendMessage(message.chatId, result.replyText);
+    if (dev) {
+      const sendMs = Math.round(performance.now() - sendStarted);
+      const totalMs = Math.round(performance.now() - flowStarted);
+      this.logger.log(
+        `[Telegram] 3/3 ${sent ? "reply sent to bot" : "reply NOT sent (see errors above)"} chatId=${message.chatId} in ${sendMs}ms | total ${totalMs}ms (webhook → user sees message)`,
+      );
+    }
   }
 
-  async sendMessage(chatId: number, text: string): Promise<void> {
+  async sendMessage(chatId: number, text: string): Promise<boolean> {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
       this.logger.warn("TELEGRAM_BOT_TOKEN is not set");
-      return;
+      return false;
     }
 
     const url = `https://api.telegram.org/bot${token}/sendMessage`;
@@ -76,6 +103,8 @@ export class TelegramService {
     if (!response.ok) {
       const errText = await response.text();
       this.logger.error(`Telegram send failed: ${response.status} ${errText}`);
+      return false;
     }
+    return true;
   }
 }

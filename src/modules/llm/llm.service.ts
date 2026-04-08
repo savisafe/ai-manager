@@ -44,6 +44,14 @@ export class LlmService {
         body.max_tokens = maxTokens;
       }
 
+      const timeoutRaw = process.env.LLM_TIMEOUT_MS?.trim();
+      const timeoutMs =
+        timeoutRaw !== undefined && timeoutRaw !== "" ? Number(timeoutRaw) : 0;
+      const signal =
+        Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? AbortSignal.timeout(timeoutMs)
+          : undefined;
+
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -51,6 +59,7 @@ export class LlmService {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
+        signal,
       });
 
       if (!response.ok) {
@@ -65,7 +74,12 @@ export class LlmService {
       const text = data.choices?.[0]?.message?.content?.trim();
       return text && text.length > 0 ? text : null;
     } catch (error) {
-      this.logger.warn(`LLM request failed: ${error}`);
+      const name = error instanceof Error ? error.name : "";
+      if (name === "TimeoutError" || name === "AbortError") {
+        this.logger.warn(`LLM request aborted (timeout LLM_TIMEOUT_MS=${process.env.LLM_TIMEOUT_MS ?? "unset"})`);
+      } else {
+        this.logger.warn(`LLM request failed: ${error}`);
+      }
       return null;
     }
   }

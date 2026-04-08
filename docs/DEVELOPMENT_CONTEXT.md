@@ -22,8 +22,11 @@
 - Добавлена проверка подписи WhatsApp webhook (`X-Hub-Signature-256` + `WHATSAPP_APP_SECRET`).
 - Применена Prisma миграция `add_idempotency` для таблицы обработанных входящих сообщений.
 - Подключена локальная LLM через Ollama (OpenAI-compatible `/v1/chat/completions`), fallback на `sales-scripts.json`.
-- Настраиваемая «рамка темы»: `LLM_TOPIC`, `LLM_FORBIDDEN_TOPICS`, `LLM_SCOPE_FILE`, `LLM_MAX_TOKENS` в системном промпте.
-- Документация запуска: `README.md` (ngrok, Telegram/WhatsApp, Ollama, Prisma).
+- Профили системного промпта (`PromptProfileModule`): JSON в `config/prompt-profiles/`, выбор `LLM_PROMPT_PROFILE`; длина ответа — `LLM_MAX_TOKENS`.
+- Логи цепочки сообщения в Telegram/WhatsApp: шаги `1/3`–`3/3` (получено → диалог → отправка в API), разбивка времени и total «webhook → ответ ушёл в канал»; только при `NODE_ENV=development` (`src/modules/shared/is-development.ts`).
+- `LLM_CONTEXT_MESSAGES` ограничивает глубину истории в запросе к LLM; `LLM_TIMEOUT_MS` — `AbortSignal.timeout` на вызов Ollama, при срыве — fallback на скрипты.
+- Документация запуска: `README.md` (ngrok, Telegram/WhatsApp, Ollama, Prisma, профили промпта).
+- Описание потока бота: `docs/BOT_ALGORITHM.md` (вебхук → БД → LLM → ответ в канал).
 
 ## In Progress
 - Уточнение sales-FSM логики и A/B вариантов скриптов.
@@ -40,6 +43,7 @@
 - Единый слой каналов: адаптеры для каждого мессенджера.
 - Отдельный слой диалоговой логики: этапы воронки продаж.
 - Отдельный слой знаний/контента: FAQ, офферы, возражения.
+- Рамка LLM (компания, тема, запреты, опциональный `scopeFile`) — сменные файлы-профили в `config/prompt-profiles/`, не переменные окружения с длинным текстом; `.env` задаёт только идентификатор профиля.
 - Основной backend: NestJS (TypeScript), REST + webhook endpoints.
 - Хранение состояния и истории: PostgreSQL (через Prisma ORM).
 - Очереди и кэш: Redis + BullMQ.
@@ -51,6 +55,10 @@
 - Выбор финального поставщика LLM и политика контроля затрат.
 
 ## Change Log
+- 2026-04-09: Добавлен `docs/BOT_ALGORITHM.md` — алгоритм работы бота и роль таблиц БД; ссылка в `README.md`.
+- 2026-04-09: Учтены `LLM_CONTEXT_MESSAGES` и `LLM_TIMEOUT_MS` в `DialogService` / `LlmService`; в README — подсказки по ускорению LLM.
+- 2026-04-09: Логи обработки входящих сообщений Telegram/WhatsApp (этапы и тайминги) включены только в dev (`NODE_ENV=development`).
+- 2026-04-09: Рамка промпта вынесена из `.env` в сменные профили `config/prompt-profiles/*.json`, модуль `PromptProfileModule`, выбор `LLM_PROMPT_PROFILE`.
 - 2026-04-08: Добавлен `README.md` с инструкцией по запуску (Docker, Prisma, ngrok, Telegram/WhatsApp, Ollama).
 - 2026-04-07: Инициализированы `PROMPT_PLAN.md` и `DEVELOPMENT_CONTEXT.md`.
 - 2026-04-07: Зафиксирован целевой стек в `TECH_STACK.md` и обновлен roadmap.

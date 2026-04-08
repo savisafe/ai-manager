@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { LlmChatMessage, LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { PromptProfileService } from "../prompt-profile/prompt-profile.service";
 import { ChannelType, DialogInput, DialogOutput } from "./dialog.types";
 
 interface SalesRule {
@@ -40,6 +41,7 @@ export class DialogService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly llmService: LlmService,
+    private readonly promptProfile: PromptProfileService,
   ) {
     this.config = this.loadConfig();
   }
@@ -183,10 +185,11 @@ export class DialogService {
       return templateFallback;
     }
 
+    const contextLimit = this.getLlmContextMessageLimit();
     const rows = await this.prisma.message.findMany({
       where: { conversationId },
       orderBy: { createdAt: "desc" },
-      take: 16,
+      take: contextLimit,
     });
     rows.reverse();
 
@@ -204,16 +207,11 @@ export class DialogService {
   }
 
   private buildSystemPrompt(stage: string, channel: ChannelType): string {
-    const company = process.env.COMPANY_NAME ?? "компании";
-    const topic = process.env.LLM_TOPIC?.trim();
-    const forbiddenRaw = process.env.LLM_FORBIDDEN_TOPICS?.trim();
-    const forbidden = forbiddenRaw
-      ? forbiddenRaw
-          .split(/[,|]/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : [];
-    const scopeFromFile = this.readOptionalTextFile(process.env.LLM_SCOPE_FILE);
+    const p = this.promptProfile.getProfile();
+    const company = p.companyName;
+    const topic = p.topic;
+    const forbidden = p.forbiddenTopics;
+    const scopeFromFile = p.scopeText;
 
     const lines: string[] = [
       `Ты — AI-менеджер компании ${company}.`,
@@ -259,18 +257,17 @@ export class DialogService {
     return lines.join("\n");
   }
 
-  private readOptionalTextFile(relativeOrAbsolute?: string): string | null {
-    const raw = relativeOrAbsolute?.trim();
-    if (!raw) {
-      return null;
+  /** Сколько последних сообщений диалога отдавать в LLM (меньше — быстрее префилл и инференс). */
+  private getLlmContextMessageLimit(): number {
+    const raw = process.env.LLM_CONTEXT_MESSAGES?.trim();
+    if (raw === undefined || raw === "") {
+      return 16;
     }
-    try {
-      const abs = path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
-      const text = readFileSync(abs, "utf8").trim();
-      return text.length > 0 ? text : null;
-    } catch {
-      return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) {
+      return 16;
     }
+    return Math.min(50, Math.max(2, Math.floor(n)));
   }
 
   private buildHandoffReply(): string {
