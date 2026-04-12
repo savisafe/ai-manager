@@ -277,6 +277,4 @@ docker compose up -d redis
 ## Документы проекта
 
 - [docs/BOT_ALGORITHM.md](BOT_ALGORITHM.md) — алгоритм от сообщения пользователя до ответа (webhook, БД, LLM)
-- [PROMPT_PLAN.md](PROMPT_PLAN.md) — роль бота, промпт, скрипты, KPI
-- [TECH_STACK.md](TECH_STACK.md) — стек и архитектура
 - [DEVELOPMENT_CONTEXT.md](DEVELOPMENT_CONTEXT.md) — что сделано и что дальше
