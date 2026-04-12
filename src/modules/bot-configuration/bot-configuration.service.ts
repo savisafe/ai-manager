@@ -1,0 +1,65 @@
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import {
+  BotConfigurationFileJson,
+  ResolvedBotConfiguration,
+} from "./bot-configuration.types";
+
+@Injectable()
+export class BotConfigurationService implements OnModuleInit {
+  private readonly logger = new Logger(BotConfigurationService.name);
+  private readonly resolved: ResolvedBotConfiguration;
+
+  constructor() {
+    const id = process.env.BOT_CONFIGURATION?.trim() || "default";
+    this.resolved = this.load(id);
+  }
+
+  onModuleInit(): void {
+    this.logger.log(
+      `Bot configuration "${this.resolved.id}" → promptProfile="${this.resolved.llmPromptProfile}", salesScripts="${this.resolved.salesScriptsPath}"`,
+    );
+  }
+
+  get(): ResolvedBotConfiguration {
+    return this.resolved;
+  }
+
+  private load(configurationId: string): ResolvedBotConfiguration {
+    const filePath = path.resolve(
+      process.cwd(),
+      "config",
+      "configurations",
+      `${configurationId}.json`,
+    );
+
+    let raw: BotConfigurationFileJson = {};
+    try {
+      const content = readFileSync(filePath, "utf8");
+      raw = JSON.parse(content) as BotConfigurationFileJson;
+    } catch (e) {
+      this.logger.warn(
+        `Configuration file missing or invalid (${filePath}), using env/default paths: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+
+    const llmPromptProfile =
+      (typeof raw.llmPromptProfile === "string" && raw.llmPromptProfile.trim().length > 0
+        ? raw.llmPromptProfile.trim()
+        : undefined) ??
+      process.env.LLM_PROMPT_PROFILE?.trim() ??
+      "default";
+
+    const salesScriptsPath =
+      (typeof raw.salesScriptsPath === "string" && raw.salesScriptsPath.trim().length > 0
+        ? raw.salesScriptsPath.trim()
+        : undefined) ?? "scripts/sales-scripts.json";
+
+    return {
+      id: configurationId,
+      llmPromptProfile,
+      salesScriptsPath,
+    };
+  }
+}

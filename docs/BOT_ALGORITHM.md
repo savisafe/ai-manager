@@ -26,7 +26,7 @@ sequenceDiagram
     I-->>CH: false, выход
   end
   CH->>D: process(channel, externalUserId, text)
-  D->>DB: upsert User, find/create Conversation
+  D->>DB: find/create User, find/create Conversation
   D->>DB: INSERT Message role=client
   Note over D: handoff, этап FSM, шаблон
   D->>DB: SELECT Message история
@@ -71,16 +71,16 @@ sequenceDiagram
 
 `DialogService.process`:
 
-1. **`User`** — `upsert` по `(channel, externalId)`: один пользователь на пару канал + внешний id.
+1. **`User`** — поиск по `channel` + `externalId`, при отсутствии — `create` (при гонке уникальности — повторный `findFirst`). Один пользователь на пару канал + внешний id.
 2. **`Conversation`** — поиск последней беседы со статусом **`ACTIVE`** для этого пользователя. Если нет — создаётся новая. Так задаётся «текущий» диалог.
 
 ### 5. Сохранение входящего сообщения (БД)
 
 В **`Message`** создаётся запись: `role = "client"`, текст, `conversationId`.
 
-### 6. Правила без LLM (файл на диске)
+### 6. Правила без LLM (JSON на диске)
 
-Используется **`scripts/sales-scripts.json`**:
+Путь к файлу задаётся сборкой бота: **`salesScriptsPath`** в `config/configurations/<BOT_CONFIGURATION>.json` (например `scripts/daria-mokko/sales-scripts.json` или `scripts/sales-scripts.json` для конфигурации `default`). При старте приложения файл читается один раз в `DialogService`.
 
 - **Handoff**: если текст совпал с `handoff.rules` → причина handoff, ответ из `handoff.replyLines`, **LLM не вызывается**.
 - Иначе **этап воронки** (`stage`): правила `rules` (подстроки → `setStage`) и логика перехода с дефолтного этапа (например на `qualification`).
@@ -91,7 +91,7 @@ sequenceDiagram
 Если **не handoff** и LLM включён (`LLM_ENABLED`):
 
 - Из **`Message`** читается хвост истории беседы (лимит **`LLM_CONTEXT_MESSAGES`**, иначе до 16 сообщений).
-- Системный промпт строится из профиля **`config/prompt-profiles/<LLM_PROMPT_PROFILE>.json`** (`PromptProfileService`).
+- Системный промпт строится из профиля **`config/prompt-profiles/<id>.json`**, где `id` = **`llmPromptProfile`** из активной сборки `config/configurations/<BOT_CONFIGURATION>.json` (если в JSON не задан — fallback к **`LLM_PROMPT_PROFILE`**). В профиле поддерживаются расширенные поля (цели, persona, запреты, **`humanLikeMode`** и др.) — см. `PromptProfileService` / `DialogService.buildSystemPrompt`.
 - Запрос к провайдеру OpenAI-совместимого API (по умолчанию **Ollama**). С **`LLM_TIMEOUT_MS`** запрос может оборваться → тогда используется **шаблон** из п.6.
 
 При handoff или выключенном / неуспешном LLM итоговый текст — шаблон или текст handoff.
@@ -127,8 +127,9 @@ sequenceDiagram
 
 | Ресурс | Назначение |
 |--------|------------|
-| `scripts/sales-scripts.json` | Этапы, шаблоны реплик, правила переходов и handoff. |
-| `config/prompt-profiles/*.json` | Компания, рамка темы, запреты, опциональный `scopeFile`. |
+| `config/configurations/*.json` | Сборка: какой **`llmPromptProfile`** и какой **`salesScriptsPath`** использовать (`BOT_CONFIGURATION` в `.env`). |
+| JSON по пути `salesScriptsPath` | Этапы, шаблоны реплик, правила переходов и handoff (часто `scripts/.../sales-scripts.json`). |
+| `config/prompt-profiles/*.json` | Рамка LLM: компания, тема, запреты, persona, цели, `humanLikeMode`, опциональный `scopeFile` и др. |
 | Ollama / внешний LLM | Инференс; параметры — переменные окружения (`LLM_*`). |
 
 ---
@@ -141,4 +142,5 @@ sequenceDiagram
 - Идемпотентность: `src/modules/idempotency/idempotency.service.ts`
 - LLM: `src/modules/llm/llm.service.ts`
 - Профиль промпта: `src/modules/prompt-profile/prompt-profile.service.ts`
+- Сборка бота (пути к профилю и скриптам): `src/modules/bot-configuration/bot-configuration.service.ts`
 - Схема БД: `prisma/schema.prisma`

@@ -23,7 +23,10 @@
 - Добавлена проверка подписи WhatsApp webhook (`X-Hub-Signature-256` + `WHATSAPP_APP_SECRET`).
 - Применена Prisma миграция `add_idempotency` для таблицы обработанных входящих сообщений.
 - Подключена локальная LLM через Ollama (OpenAI-compatible `/v1/chat/completions`), fallback на `sales-scripts.json`.
-- Профили системного промпта (`PromptProfileModule`): JSON в `config/prompt-profiles/`, выбор `LLM_PROMPT_PROFILE`; длина ответа — `LLM_MAX_TOKENS`.
+- Профили системного промпта (`PromptProfileModule`): JSON в `config/prompt-profiles/`; идентификатор профиля задаётся через сборку бота (см. ниже) или fallback `LLM_PROMPT_PROFILE`; длина ответа — `LLM_MAX_TOKENS`.
+- **Конфигурации бота** (`BotConfigurationModule`, глобальный модуль): файл `config/configurations/<BOT_CONFIGURATION>.json` (переменная окружения `BOT_CONFIGURATION`, по умолчанию `default`). В сборке указываются `llmPromptProfile` (имя файла без `.json` из `prompt-profiles/`) и `salesScriptsPath` (путь к JSON скриптов продаж от корня репозитория). Пример готовых сборок: `daria-mokko` (студия), `test-saas`, `test-fitness` — для переключения ниши при тестах.
+- Расширенные поля профиля промпта: `persona`, `primaryGoals`, `servicesHighlight`, `neverDo`, `bookingAndContact`, `additionalStyleRules`, `language`, флаг **`humanLikeMode`** (более «живой» тон в системном промпте). Парсинг в `PromptProfileService`, сборка текста — `DialogService.buildSystemPrompt`.
+- Резолв пользователя для диалога: `findFirst` по `channel` + `externalId` и `create` с обработкой гонки `P2002` (вместо `upsert` по составному unique в типах клиента).
 - Логи цепочки сообщения в Telegram/WhatsApp: шаги `1/3`–`3/3` (получено → диалог → отправка в API), разбивка времени и total «webhook → ответ ушёл в канал»; только при `NODE_ENV=development` (`src/modules/shared/is-development.ts`).
 - `LLM_CONTEXT_MESSAGES` ограничивает глубину истории в запросе к LLM; `LLM_TIMEOUT_MS` — `AbortSignal.timeout` на вызов Ollama, при срыве — fallback на скрипты.
 - Документация запуска: `README.md` (ngrok, Telegram/WhatsApp, Ollama, Prisma, профили промпта).
@@ -46,7 +49,8 @@
 - Единый слой каналов: адаптеры для каждого мессенджера.
 - Отдельный слой диалоговой логики: этапы воронки продаж.
 - Отдельный слой знаний/контента: FAQ, офферы, возражения.
-- Рамка LLM (компания, тема, запреты, опциональный `scopeFile`) — сменные файлы-профили в `config/prompt-profiles/`, не переменные окружения с длинным текстом; `.env` задаёт только идентификатор профиля.
+- Рамка LLM (компания, тема, запреты, опциональный `scopeFile`, режим «человечнее» и др.) — в файлах `config/prompt-profiles/*.json`; длинный текст не хранить в `.env`.
+- Переключение «какой бот запущен» — **`BOT_CONFIGURATION`** → один JSON в `config/configurations/` связывает профиль промпта и путь к sales-скриптам; **`LLM_PROMPT_PROFILE`** используется как запасной вариант, если в сборке не задан `llmPromptProfile`.
 - Основной backend: NestJS (TypeScript), REST + webhook endpoints.
 - Хранение состояния и истории: PostgreSQL (через Prisma ORM).
 - Очереди и кэш: целевой стек — Redis + BullMQ; **сейчас** Redis в Docker и npm-зависимости готовы, использование очереди в коде — следующий шаг (см. Next п.1 и `ROADMAP.md`, фаза A).
@@ -58,6 +62,7 @@
 - Выбор финального поставщика LLM и политика контроля затрат.
 
 ## Change Log
+- 2026-04-13: Конфигурации бота (`BOT_CONFIGURATION`, `config/configurations/*.json`); расширенные поля профиля промпта и `humanLikeMode`; тестовые профили `test-saas` / `test-fitness` и сборка `daria-mokko`; обновлены `docs/BOT_ALGORITHM.md`, `docs/README.md`, `docs/TECH_STACK.md`.
 - 2026-04-09: План развития вынесен в `docs/ROADMAP.md`; в контексте — ссылка после блока Next.
 - 2026-04-09: Уточнён статус Redis/BullMQ (инфра + зависимости без воркера); добавлен черновик «План развития»; обновлён Next п.1; стадия проекта в шапке.
 - 2026-04-09: Добавлен `docs/BOT_ALGORITHM.md` — алгоритм работы бота и роль таблиц БД; ссылка в `README.md`.

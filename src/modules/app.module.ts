@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { BotConfigurationModule } from "./bot-configuration/bot-configuration.module";
 import { DialogModule } from "./dialog/dialog.module";
 import { HealthModule } from "./health/health.module";
 import { IdempotencyModule } from "./idempotency/idempotency.module";
@@ -9,6 +10,7 @@ import { WhatsAppModule } from "./whatsapp/whatsapp.module";
 
 @Module({
   imports: [
+    BotConfigurationModule,
     PrismaModule,
     IdempotencyModule,
     LlmModule,

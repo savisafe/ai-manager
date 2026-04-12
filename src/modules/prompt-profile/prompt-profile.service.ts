@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { BotConfigurationService } from "../bot-configuration/bot-configuration.service";
 import { PromptProfileFileJson, ResolvedLlmPromptProfile } from "./prompt-profile.types";
 
 @Injectable()
@@ -8,11 +9,13 @@ export class PromptProfileService implements OnModuleInit {
   private readonly logger = new Logger(PromptProfileService.name);
   private profile!: ResolvedLlmPromptProfile;
 
+  constructor(private readonly botConfiguration: BotConfigurationService) {}
+
   onModuleInit(): void {
-    const id = process.env.LLM_PROMPT_PROFILE?.trim() || "default";
+    const id = this.botConfiguration.get().llmPromptProfile;
     this.profile = this.loadResolvedProfile(id);
     this.logger.log(
-      `LLM prompt profile "${this.profile.id}" (company="${this.profile.companyName}")`,
+      `LLM prompt profile "${this.profile.id}" (company="${this.profile.companyName}"${this.profile.humanLikeMode ? ", human-like mode" : ""})`,
     );
   }
 
@@ -43,10 +46,38 @@ export class PromptProfileService implements OnModuleInit {
     const forbiddenTopics = Array.isArray(raw.forbiddenTopics)
       ? raw.forbiddenTopics.map((s) => String(s).trim()).filter(Boolean)
       : [];
+    const neverDo = Array.isArray(raw.neverDo)
+      ? raw.neverDo.map((s) => String(s).trim()).filter(Boolean)
+      : [];
+    const primaryGoals = Array.isArray(raw.primaryGoals)
+      ? raw.primaryGoals.map((s) => String(s).trim()).filter(Boolean)
+      : [];
+    const additionalStyleRules = Array.isArray(raw.additionalStyleRules)
+      ? raw.additionalStyleRules.map((s) => String(s).trim()).filter(Boolean)
+      : [];
     const companyName =
       typeof raw.companyName === "string" && raw.companyName.trim().length > 0
         ? raw.companyName.trim()
         : "компании";
+    const persona =
+      typeof raw.persona === "string" && raw.persona.trim().length > 0 ? raw.persona.trim() : undefined;
+    const language =
+      typeof raw.language === "string" && raw.language.trim().length > 0
+        ? raw.language.trim()
+        : undefined;
+    const servicesHighlight =
+      typeof raw.servicesHighlight === "string" && raw.servicesHighlight.trim().length > 0
+        ? raw.servicesHighlight.trim()
+        : undefined;
+    const bookingAndContact =
+      typeof raw.bookingAndContact === "string" && raw.bookingAndContact.trim().length > 0
+        ? raw.bookingAndContact.trim()
+        : undefined;
+
+    const rawHuman = raw.humanLikeMode;
+    const humanLikeMode =
+      rawHuman === true ||
+      (typeof rawHuman === "string" && rawHuman.trim().toLowerCase() === "true");
 
     let scopeText: string | undefined;
     if (typeof raw.scopeFile === "string" && raw.scopeFile.trim().length > 0) {
@@ -56,8 +87,16 @@ export class PromptProfileService implements OnModuleInit {
     return {
       id: profileId,
       companyName,
+      persona,
+      language,
+      primaryGoals: primaryGoals.length > 0 ? primaryGoals : undefined,
       topic: topic && topic.length > 0 ? topic : undefined,
+      servicesHighlight,
       forbiddenTopics,
+      neverDo: neverDo.length > 0 ? neverDo : undefined,
+      bookingAndContact,
+      additionalStyleRules: additionalStyleRules.length > 0 ? additionalStyleRules : undefined,
+      humanLikeMode: humanLikeMode ? true : undefined,
       scopeText,
     };
   }

@@ -32,7 +32,8 @@
 
 ## 4) AI/LLM слой
 - Вызов: OpenAI-совместимый HTTP API (`LlmService`); на MVP удобно `Ollama` (`/v1/chat/completions`). Абстракция нескольких провайдеров (`LLMProvider`) — целевое развитие.
-- Промпты и сценарии: JSON-профили в `config/prompt-profiles/`, скрипты в `scripts/sales-scripts.json`.
+- **Сборка бота:** `BOT_CONFIGURATION` → файл `config/configurations/<имя>.json` связывает идентификатор профиля промпта (`llmPromptProfile`) и путь к JSON sales-скриптов (`salesScriptsPath`). Примеры: `daria-mokko`, `test-saas`, `test-fitness`, `default`.
+- Промпты: `config/prompt-profiles/<id>.json` (рамка темы, persona, цели, запреты, опционально `humanLikeMode`, `scopeFile` и др.). Сценарии воронки: JSON по пути из `salesScriptsPath` (не обязательно один общий `scripts/sales-scripts.json`).
 - Защита: fallback на шаблоны скрипта, hand-off к человеку; расширенная пост-валидация ответа LLM — в планах.
 
 ## 5) Хранение данных (MVP)
@@ -43,7 +44,7 @@
 - `handoff_events` — передачи менеджеру-человеку.
 
 ## 6) Базовая структура модулей
-- **Фактически:** монолитный Nest-проект, `src/modules/*` (health, telegram, whatsapp, dialog, llm, prisma, idempotency, prompt-profile, shared).
+- **Фактически:** монолитный Nest-проект, `src/modules/*` (health, telegram, whatsapp, dialog, llm, prisma, idempotency, bot-configuration, prompt-profile, shared).
 - **Целевое разбиение (можно эволюционно приблизить):** `apps/api` или тот же корень; `channel` — единый адаптер; `dialog`; `llm`; `crm` — лиды и метрики (пока данные в Prisma без отдельного CRM-модуля).
 
 ## 7) Минимальные npm зависимости

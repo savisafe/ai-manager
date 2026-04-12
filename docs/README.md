@@ -202,15 +202,21 @@ LLM_TEMPERATURE=0.35
 LLM_MAX_TOKENS=400
 ```
 
-4. Профиль промпта (рамка темы, запреты, компания) — **не в `.env`**, а в JSON-модулях [config/prompt-profiles/](./config/prompt-profiles/):
+4. **Сборка бота** (какая ниша и какие файлы подключать) — переменная **`BOT_CONFIGURATION`** и JSON [config/configurations/](../config/configurations/):
 
-- По умолчанию: `LLM_PROMPT_PROFILE=default` → файл `config/prompt-profiles/default.json`.
-- Другая задача/бренд: скопируй `default.json` в новый файл (например `acme-sales.json`) и в `.env` укажи `LLM_PROMPT_PROFILE=acme-sales`.
-- Длинные факты о продукте: поле `"scopeFile": "config/llm-scope.txt"` в JSON профиля; шаблон текста: [config/llm-scope.example.txt](../config/llm-scope.example.txt).
+   - В `.env`: `BOT_CONFIGURATION=daria-mokko` (или `default`, `test-saas`, `test-fitness` и т.д.).
+   - Файл `config/configurations/<имя>.json` задаёт **`llmPromptProfile`** (имя без `.json` из каталога профилей) и **`salesScriptsPath`** (путь к JSON скриптов продаж от корня репозитория, например `scripts/daria-mokko/sales-scripts.json`).
+   - После смены значения нужен **перезапуск** приложения.
 
-Пример второго профиля без scope-файла: `config/prompt-profiles/minimal.json` → `LLM_PROMPT_PROFILE=minimal`.
+5. **Профиль промпта** (рамка темы, компания, persona, цели, запреты, `humanLikeMode`, опционально `scopeFile`) — JSON в [config/prompt-profiles/](../config/prompt-profiles/):
 
-Если `LLM_ENABLED=false` или Ollama недоступна, ответы идут из шаблонов в [scripts/sales-scripts.json](../scripts/sales-scripts.json).
+   - Идентификатор профиля берётся из **`llmPromptProfile`** в активной сборке; если там не задан — используется fallback **`LLM_PROMPT_PROFILE`** (например `default` → `config/prompt-profiles/default.json`).
+   - Новый бренд: добавь `config/prompt-profiles/my-brand.json`, затем создай или скопируй `config/configurations/my-brand.json` с `"llmPromptProfile": "my-brand"` и нужным `salesScriptsPath`.
+   - Длинные факты о продукте: поле `"scopeFile": "config/llm-scope.txt"` в JSON профиля; шаблон: [config/llm-scope.example.txt](../config/llm-scope.example.txt).
+
+   Пример профиля без scope: `config/prompt-profiles/minimal.json`.
+
+Если `LLM_ENABLED=false` или Ollama недоступна, ответы идут из **шаблонов** в JSON по пути `salesScriptsPath` из текущей сборки (не обязательно [scripts/sales-scripts.json](../scripts/sales-scripts.json)).
 
 Сообщение `listen tcp 127.0.0.1:11434: address already in use` означает, что Ollama **уже запущена** — второй раз `ollama serve` не нужен.
 

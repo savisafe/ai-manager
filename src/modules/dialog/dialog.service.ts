@@ -1,8 +1,10 @@
 import { Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { LlmChatMessage, LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { BotConfigurationService } from "../bot-configuration/bot-configuration.service";
 import { PromptProfileService } from "../prompt-profile/prompt-profile.service";
 import { ChannelType, DialogInput, DialogOutput } from "./dialog.types";
 
@@ -42,6 +44,7 @@ export class DialogService {
     private readonly prisma: PrismaService,
     private readonly llmService: LlmService,
     private readonly promptProfile: PromptProfileService,
+    private readonly botConfiguration: BotConfigurationService,
   ) {
     this.config = this.loadConfig();
   }
@@ -111,19 +114,7 @@ export class DialogService {
   }
 
   private async getOrCreateConversation(channel: string, externalUserId: string) {
-    const user = await this.prisma.user.upsert({
-      where: {
-        channel_externalId: {
-          channel,
-          externalId: externalUserId,
-        },
-      },
-      update: {},
-      create: {
-        channel,
-        externalId: externalUserId,
-      },
-    });
+    const user = await this.getOrCreateUser(channel, externalUserId);
 
     const conversation = await this.prisma.conversation.findFirst({
       where: {
@@ -142,6 +133,30 @@ export class DialogService {
     });
 
     return { user, conversation: createdConversation };
+  }
+
+  private async getOrCreateUser(channel: string, externalUserId: string) {
+    const existing = await this.prisma.user.findFirst({
+      where: { channel, externalId: externalUserId },
+    });
+    if (existing) {
+      return existing;
+    }
+    try {
+      return await this.prisma.user.create({
+        data: { channel, externalId: externalUserId },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        const retry = await this.prisma.user.findFirst({
+          where: { channel, externalId: externalUserId },
+        });
+        if (retry) {
+          return retry;
+        }
+      }
+      throw e;
+    }
   }
 
   private detectStage(text: string, currentStage: string): string {
@@ -212,17 +227,30 @@ export class DialogService {
     const topic = p.topic;
     const forbidden = p.forbiddenTopics;
     const scopeFromFile = p.scopeText;
+    const neverDo = p.neverDo ?? [];
+    const primaryGoals = p.primaryGoals ?? [];
+    const lang = p.language ?? "русский";
 
-    const lines: string[] = [
-      `Ты — AI-менеджер компании ${company}.`,
-      `Канал: ${channel}. Текущий этап воронки: ${stage}.`,
-      "",
-      "Твоя цель: помогать клиентам в чате, консультировать и продавать по скриптам без давления.",
-    ];
+    const lines: string[] = [];
+    if (p.persona) {
+      lines.push(p.persona);
+    } else {
+      lines.push(`Ты — AI-менеджер компании ${company}.`);
+    }
+    lines.push(`Канал: ${channel}. Текущий этап воронки: ${stage}.`, `Основной язык ответов: ${lang}.`, "");
+
+    if (primaryGoals.length > 0) {
+      lines.push("Цели в этом чате:", ...primaryGoals.map((g) => `- ${g}`), "");
+    } else {
+      lines.push("Твоя цель: помогать клиентам в чате, консультировать и продавать по скриптам без давления.", "");
+    }
+
+    if (p.servicesHighlight) {
+      lines.push("Фокус услуг и предложений:", p.servicesHighlight, "");
+    }
 
     if (topic) {
       lines.push(
-        "",
         "Рамка темы (держись только её; не уходи в общие разговоры):",
         topic,
         "",
@@ -241,18 +269,50 @@ export class DialogService {
       );
     }
 
+    if (neverDo.length > 0) {
+      lines.push("", "Категорически:", ...neverDo.map((f) => `- ${f}`));
+    }
+
     if (scopeFromFile) {
       lines.push("", "Дополнительные инструкции компании (приоритетны для фактов о продукте):", scopeFromFile);
     }
 
+    if (p.bookingAndContact) {
+      lines.push("", "Запись и контакты (без выдуманных данных):", p.bookingAndContact);
+    }
+
+    if (p.humanLikeMode) {
+      lines.push(
+        "",
+        "Режим «как живой человек» (тема и факты не ослабляй):",
+        "- Меняй формулировки от сообщения к сообщению; избегай одних и тех же шаблонных вступлений подряд.",
+        "- Допустимы мягкие связки и разговорный тон там, где уместно; без канцелярита и «отчётного» списка ради списка.",
+        "- Не превращай каждый ответ в маркированный FAQ: в мессенджере лучше 1–2 живых абзаца, списки — только если клиенту так проще воспринять.",
+        "- Кратко покажи, что услышал запрос, без воды и без избыточных извинений.",
+        "- Смайлики — по минимуму (один нейтральный или без них); без канцелярского «рад вас видеть» в каждом сообщении.",
+      );
+    }
+
+    const styleLead = p.humanLikeMode
+      ? "- Пиши коротко и по-человечески: дружелюбно, без сухого отчёта."
+      : "- Пиши коротко, дружелюбно.";
+
     lines.push(
       "",
       "Правила стиля и продаж:",
-      "- Пиши коротко, по-русски, дружелюбно.",
+      styleLead,
       "- Сначала уточняй потребность, потом предлагай решение.",
       "- Не выдумывай цены, сроки и условия; если данных нет — скажи, что уточнит менеджер.",
-      "- Один ответ = несколько коротких абзацев, в конце один конкретный следующий шаг.",
+      p.humanLikeMode
+        ? "- В конце — один ясный следующий шаг или вопрос; не обязательно «официальное» закрытие абзаца."
+        : "- Один ответ = несколько коротких абзацев, в конце один конкретный следующий шаг.",
     );
+
+    if (p.additionalStyleRules?.length) {
+      for (const rule of p.additionalStyleRules) {
+        lines.push(`- ${rule}`);
+      }
+    }
 
     return lines.join("\n");
   }
@@ -313,7 +373,8 @@ export class DialogService {
     };
 
     try {
-      const configPath = path.resolve(process.cwd(), "scripts", "sales-scripts.json");
+      const relative = this.botConfiguration.get().salesScriptsPath;
+      const configPath = path.resolve(process.cwd(), relative);
       const content = readFileSync(configPath, "utf8");
       return JSON.parse(content) as SalesScriptsConfig;
     } catch {

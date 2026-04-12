@@ -1,5 +1,6 @@
 node_modules/
 dist/
+example-chats
 .idea
 .env
 .env.local
