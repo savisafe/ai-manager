@@ -16,7 +16,7 @@
 - Добавено сохранение входящих/исходящих сообщений в PostgreSQL через Prisma.
 - Применена первая Prisma миграция `init` к PostgreSQL.
 - Вынесены sales-скрипты и правила stage-переходов в `scripts/sales-scripts.json`.
-- Добавлены handoff-правила в конфиг и запись событий в `handoff_events`.
+- Добавлены handoff-триггеры в конфиг (`handoff.handOffTriggers` в JSON скриптов) и запись событий в `handoff_events`.
 - Добавлена idempotency-обработка входящих сообщений (Telegram/WhatsApp) по `messageId`.
 - Добавлена проверка подписи WhatsApp webhook (`X-Hub-Signature-256` + `WHATSAPP_APP_SECRET`).
 - Применена Prisma миграция `add_idempotency` для таблицы обработанных входящих сообщений.
@@ -58,6 +58,8 @@
 - Выбор финального поставщика LLM и политика контроля затрат.
 
 ## Change Log
+- 2026-04-14: Удалены таблица и модель Prisma `LeadState` (фактически дублировали последнее сообщение клиента; поля бюджета/сроков не использовались). Добавлена миграция `20260414120000_drop_lead_state`; убран `upsert` из `DialogService`; обновлён `docs/BOT_ALGORITHM.md`. После pull — `npx prisma migrate deploy` (или `migrate dev`).
+- 2026-04-14: В блоке `handoff` sales-скриптов ключ триггеров переименован: `rules` → `handOffTriggers` (все файлы в `scripts/**/sales-scripts.json`); `DialogService` и fallback-конфиг в коде читают `handOffTriggers`; обновлён `docs/BOT_ALGORITHM.md`. Ранее сохранённые копии JSON со `handoff.rules` нужно перевести на новый ключ.
 - 2026-04-13: Конфигурации бота (`BOT_CONFIGURATION`, `config/configurations/*.json`); расширенные поля профиля промпта и `humanLikeMode`; тестовые профили `test-saas` / `test-fitness` и сборка `daria-mokko`; обновлены `docs/BOT_ALGORITHM.md`, `docs/README.md`, `docs/TECH_STACK.md`.
 - 2026-04-09: План развития вынесен в `docs/ROADMAP.md`; в контексте — ссылка после блока Next.
 - 2026-04-09: Уточнён статус Redis/BullMQ (инфра + зависимости без воркера); добавлен черновик «План развития»; обновлён Next п.1; стадия проекта в шапке.

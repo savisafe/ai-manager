@@ -34,7 +34,6 @@ sequenceDiagram
   L-->>D: текст или ошибка/таймаут
   D->>DB: UPDATE Conversation
   D->>DB: INSERT Message role=assistant
-  D->>DB: UPSERT LeadState
   opt handoff
     D->>DB: INSERT HandoffEvent
   end
@@ -100,7 +99,6 @@ sequenceDiagram
 
 - **`Conversation`**: обновляются `stage`, при handoff — `status = HANDED_OFF`, иначе остаётся `ACTIVE`.
 - **`Message`**: новая строка с `role = "assistant"` и итоговым текстом.
-- **`LeadState`**: `upsert` — в т.ч. `need` (последний текст пользователя), `nextAction` из конфига или handoff.
 
 При handoff дополнительно **`HandoffEvent`**: `conversationId`, `reason`.
 
@@ -117,7 +115,6 @@ sequenceDiagram
 | **User** | Участник чата: `channel` + `externalId`. |
 | **Conversation** | Диалог: `stage`, `status` (`ACTIVE` / `HANDED_OFF` / `CLOSED`). |
 | **Message** | История: роли `client` / `assistant`. |
-| **LeadState** | Сводка по лиду: `need`, `nextAction`, поля бюджета/сроков в схеме. |
 | **HandoffEvent** | Журнал передачи запроса человеку. |
 | **ProcessedInboundMessage** | Идемпотентность входящих по `(channel, externalMessageId)`. |
 

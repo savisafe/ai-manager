@@ -35,7 +35,6 @@ model Conversation {
   updatedAt  DateTime           @updatedAt
   user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages   Message[]
-  leadState  LeadState?
 }
 
 model Message {
@@ -44,17 +43,6 @@ model Message {
   role           String
   text           String
   createdAt      DateTime     @default(now())
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-}
-
-model LeadState {
-  id             String       @id @default(cuid())
-  conversationId String       @unique
-  need           String?
-  budget         String?
-  deadline       String?
-  nextAction     String?
-  updatedAt      DateTime     @updatedAt
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 }
 

@@ -71,10 +71,6 @@ export class DialogService {
     const replyText = handoffReason
       ? this.buildHandoffReply()
       : await this.tryLlmReply(conversation.id, nextStage, input.channel, templateReply);
-    const nextAction = handoffReason
-      ? this.config.handoff?.nextAction ?? "await_human_manager"
-      : this.config.nextAction;
-
     await this.prisma.conversation.update({
       where: { id: conversation.id },
       data: {
@@ -88,16 +84,6 @@ export class DialogService {
         conversationId: conversation.id,
         role: "assistant",
         text: replyText,
-      },
-    });
-
-    await this.prisma.leadState.upsert({
-      where: { conversationId: conversation.id },
-      update: { need: input.text, nextAction },
-      create: {
-        conversationId: conversation.id,
-        need: input.text,
-        nextAction,
       },
     });
 
