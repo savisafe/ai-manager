@@ -26,4 +26,14 @@ export class IdempotencyService {
       throw error;
     }
   }
+
+  /** Если постановка в очередь не удалась после tryProcess — чтобы провайдер мог повторить вебхук. */
+  async revert(channel: string, externalMessageId?: string): Promise<void> {
+    if (!externalMessageId) {
+      return;
+    }
+    await this.prisma.processedInboundMessage.deleteMany({
+      where: { channel, externalMessageId },
+    });
+  }
 }

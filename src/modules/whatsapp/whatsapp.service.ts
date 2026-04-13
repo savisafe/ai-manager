@@ -1,6 +1,7 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { forwardRef, Inject, Injectable, Logger } from "@nestjs/common";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { DialogQueueService } from "../dialog-queue/dialog-queue.service";
 import { DialogService } from "../dialog/dialog.service";
 import { IdempotencyService } from "../idempotency/idempotency.service";
 import { isDevelopment } from "../shared/is-development";
@@ -15,6 +16,8 @@ export class WhatsAppService {
   constructor(
     private readonly dialogService: DialogService,
     private readonly idempotencyService: IdempotencyService,
+    @Inject(forwardRef(() => DialogQueueService))
+    private readonly dialogQueueService: DialogQueueService,
   ) {}
 
   verifyWebhook(mode?: string, token?: string, challenge?: string): string | null {
@@ -104,28 +107,55 @@ export class WhatsAppService {
         );
       }
 
-      const dialogStarted = dev ? performance.now() : 0;
-      const result = await this.dialogService.process({
-        channel: "whatsapp",
-        externalUserId: message.from,
-        text: message.text,
-      });
-      if (dev) {
-        const dialogMs = Math.round(performance.now() - dialogStarted);
-        this.logger.log(
-          `[WhatsApp] 2/3 dialog done from=${message.from} stage=${result.stage} in ${dialogMs}ms`,
-        );
+      if (this.dialogQueueService.isEnabled()) {
+        try {
+          await this.dialogQueueService.enqueue({
+            channel: "whatsapp",
+            ...message,
+          });
+        } catch (e) {
+          await this.idempotencyService.revert("whatsapp", message.messageId);
+          throw e;
+        }
+        if (dev) {
+          this.logger.log(
+            `[WhatsApp] enqueued from=${message.from} messageId=${message.messageId ?? "n/a"} (${Math.round(performance.now() - flowStarted)}ms to ack path)`,
+          );
+        }
+        continue;
       }
 
-      const sendStarted = dev ? performance.now() : 0;
-      const sent = await this.sendTextMessage(message.from, result.replyText);
-      if (dev) {
-        const sendMs = Math.round(performance.now() - sendStarted);
-        const totalMs = Math.round(performance.now() - flowStarted);
-        this.logger.log(
-          `[WhatsApp] 3/3 ${sent ? "reply sent to user" : "reply NOT sent (see errors above)"} to=${message.from} in ${sendMs}ms | total ${totalMs}ms (webhook → user sees message)`,
-        );
-      }
+      await this.processInboundQueued(message, flowStarted);
+    }
+  }
+
+  async processInboundQueued(
+    message: IncomingWhatsAppMessage,
+    flowStarted?: number,
+  ): Promise<void> {
+    const dev = isDevelopment();
+    const flowT0 = flowStarted ?? (dev ? performance.now() : 0);
+    const dialogStarted = dev ? performance.now() : 0;
+    const result = await this.dialogService.process({
+      channel: "whatsapp",
+      externalUserId: message.from,
+      text: message.text,
+    });
+    if (dev) {
+      const dialogMs = Math.round(performance.now() - dialogStarted);
+      this.logger.log(
+        `[WhatsApp] 2/3 dialog done from=${message.from} stage=${result.stage} in ${dialogMs}ms`,
+      );
+    }
+
+    const sendStarted = dev ? performance.now() : 0;
+    const sent = await this.sendTextMessage(message.from, result.replyText);
+    if (dev) {
+      const sendMs = Math.round(performance.now() - sendStarted);
+      const totalMs = Math.round(performance.now() - flowT0);
+      this.logger.log(
+        `[WhatsApp] 3/3 ${sent ? "reply sent to user" : "reply NOT sent (see errors above)"} to=${message.from} in ${sendMs}ms | total ${totalMs}ms (webhook → user sees message)`,
+      );
     }
   }
 

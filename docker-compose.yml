@@ -1,9 +1,6 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: ai-manager-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -16,7 +13,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: ai-manager-redis
     restart: unless-stopped
     ports:
       - "6379:6379"

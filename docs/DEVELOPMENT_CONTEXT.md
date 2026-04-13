@@ -3,17 +3,18 @@
 ## Project
 - Name: `ai-manager`
 - Goal: AI-менеджер для консультаций и продаж в чатах (Telegram, WhatsApp, др.)
-- Current stage: MVP core (синхронная обработка webhook; очередь — в планах)
+- Current stage: MVP core — входящие сообщения по умолчанию через **BullMQ** (быстрый ACK вебхука); при `DIALOG_QUEUE_ENABLED=false` — синхронная обработка в вебхуке без Redis.
 
 ## Implemented
 - Инициализирован backend-каркас (NestJS + TypeScript).
-- Добавлены `docker-compose.yml` (PostgreSQL + Redis) и `prisma/schema.prisma`.
-- Redis поднят в Compose; в `package.json` добавлены `bullmq` и `ioredis` — **очередь в Nest-приложении пока не подключена**, вебхуки обрабатывают диалог синхронно.
+- Добавлены `docker-compose.yml` (PostgreSQL + Redis; без устаревшего ключа `version`, без фиксированных `container_name` — имена контейнеров задаёт Compose) и `prisma/schema.prisma`.
+- **BullMQ** (`DialogQueueModule`): очередь `dialog-inbound`. После idempotency вебхук Telegram/WhatsApp ставит job и отвечает провайдеру; `DialogQueueWorkerService` в том же процессе вызывает `TelegramService` / `WhatsAppService` → `processInboundQueued` (LLM + отправка). `TelegramModule` / `WhatsAppModule` **экспортируют** сервисы для внедрения в воркер. Переменные: `DIALOG_QUEUE_ENABLED`, `DIALOG_QUEUE_WORKER_ENABLED`, `DIALOG_QUEUE_CONCURRENCY`, опционально `DIALOG_QUEUE_ATTEMPTS`, `DIALOG_QUEUE_BACKOFF_MS`, `REDIS_PASSWORD`. **Custom `jobId`**: `telegram-<messageId>`, `whatsapp-<id>` (символ `:` в id запрещён BullMQ). При ошибке `enqueue` — `IdempotencyService.revert` для повторной доставки вебхука.
+- Мониторинг очереди: `GET /health/queue` (счётчики Redis; при недоступности Redis — 503). В dev логируются постановка в очередь и события воркера `[Queue] job active` / `job completed`.
 - Добавлен WhatsApp webhook модуль (`GET` verify + `POST` receive/send text).
 - Добавлен Telegram webhook модуль (`POST` receive/send text).
 - Добавлены команды управления Telegram webhook и `.gitignore` для защиты `.env`.
 - Добавлен общий `DialogService` для единых ответов в Telegram/WhatsApp.
-- Добавено сохранение входящих/исходящих сообщений в PostgreSQL через Prisma.
+- Добавлено сохранение входящих/исходящих сообщений в PostgreSQL через Prisma.
 - Применена первая Prisma миграция `init` к PostgreSQL.
 - Вынесены sales-скрипты и правила stage-переходов в `scripts/sales-scripts.json`.
 - Добавлены handoff-триггеры в конфиг (`handoff.handOffTriggers` в JSON скриптов) и запись событий в `handoff_events`.
@@ -28,18 +29,17 @@
 - Логи цепочки сообщения в Telegram/WhatsApp: шаги `1/3`–`3/3` (получено → диалог → отправка в API), разбивка времени и total «webhook → ответ ушёл в канал»; только при `NODE_ENV=development` (`src/modules/shared/is-development.ts`).
 - `LLM_CONTEXT_MESSAGES` ограничивает глубину истории в запросе к LLM; `LLM_TIMEOUT_MS` — `AbortSignal.timeout` на вызов Ollama, при срыве — fallback на скрипты.
 - Документация запуска: `README.md` (ngrok, Telegram/WhatsApp, Ollama, Prisma, профили промпта).
-- Описание потока бота: `docs/BOT_ALGORITHM.md` (вебхук → БД → LLM → ответ в канал).
+- Описание потока бота: `docs/BOT_ALGORITHM.md` (вебхук → при включённой очереди: Redis job → воркер → БД → LLM → канал; иначе синхронно в вебхуке).
 
 ## In Progress
 - Уточнение sales-FSM логики и A/B вариантов скриптов.
 
 ## Next
-1. Подключить BullMQ: постановка job из webhook, worker с вызовом `DialogService`, быстрый ACK провайдеру (сохранить idempotency на входе).
-2. Настроить Telegram/WhatsApp production webhook URLs.
-3. Добавить A/B варианты sales-скриптов в конфиг.
-4. Добавить уведомление менеджера при handoff событии.
-5. Добавить retry/backoff для неуспешной отправки сообщений в каналы.
-6. Добавить базовые метрики конверсии по этапам воронки.
+1. Настроить Telegram/WhatsApp production webhook URLs.
+2. Добавить A/B варианты sales-скриптов в конфиг.
+3. Добавить уведомление менеджера при handoff событии.
+4. Добавить retry/backoff для неуспешной отправки сообщений в каналы.
+5. Добавить базовые метрики конверсии по этапам воронки.
 
 ## Architecture Decisions
 - Единый слой каналов: адаптеры для каждого мессенджера.
@@ -49,7 +49,8 @@
 - Переключение «какой бот запущен» — **`BOT_CONFIGURATION`** → один JSON в `config/configurations/` связывает профиль промпта и путь к sales-скриптам; **`LLM_PROMPT_PROFILE`** используется как запасной вариант, если в сборке не задан `llmPromptProfile`.
 - Основной backend: NestJS (TypeScript), REST + webhook endpoints.
 - Хранение состояния и истории: PostgreSQL (через Prisma ORM).
-- Очереди и кэш: целевой стек — Redis + BullMQ; **сейчас** Redis в Docker и npm-зависимости готовы, использование очереди в коде — следующий шаг (см. Next п.1 и `ROADMAP.md`, фаза A).
+- Очереди: Redis + BullMQ — очередь входящих диалогов `dialog-inbound` (`DialogQueueModule`); опционально отдельный инстанс API с `DIALOG_QUEUE_WORKER_ENABLED=false` и выделенный воркер — по мере масштабирования.
+- `HealthModule` подключает `DialogQueueModule` для эндпоинта метрик очереди.
 
 ## Risks / Open Questions
 - Выбор провайдера для WhatsApp (официальный API vs BSP).
@@ -58,11 +59,12 @@
 - Выбор финального поставщика LLM и политика контроля затрат.
 
 ## Change Log
+- 2026-04-14: **Очередь входящих (BullMQ) в продакшен-пути**: `dialog-inbound`, `processInboundQueued`, `IdempotencyService.revert` при сбое enqueue; `jobId` без `:` (`telegram-…`, `whatsapp-…`); экспорт `TelegramService` / `WhatsAppService`; `GET /health/queue`; dev-логи очереди; `HealthModule` → `DialogQueueModule`. Docker Compose: убраны `version` и жёсткие `container_name`. Параметры в `.env.example`. (Запись от 2026-04-09 про «Redis без воркера» устарела.)
 - 2026-04-14: Удалены таблица и модель Prisma `LeadState` (фактически дублировали последнее сообщение клиента; поля бюджета/сроков не использовались). Добавлена миграция `20260414120000_drop_lead_state`; убран `upsert` из `DialogService`; обновлён `docs/BOT_ALGORITHM.md`. После pull — `npx prisma migrate deploy` (или `migrate dev`).
 - 2026-04-14: В блоке `handoff` sales-скриптов ключ триггеров переименован: `rules` → `handOffTriggers` (все файлы в `scripts/**/sales-scripts.json`); `DialogService` и fallback-конфиг в коде читают `handOffTriggers`; обновлён `docs/BOT_ALGORITHM.md`. Ранее сохранённые копии JSON со `handoff.rules` нужно перевести на новый ключ.
 - 2026-04-13: Конфигурации бота (`BOT_CONFIGURATION`, `config/configurations/*.json`); расширенные поля профиля промпта и `humanLikeMode`; тестовые профили `test-saas` / `test-fitness` и сборка `daria-mokko`; обновлены `docs/BOT_ALGORITHM.md`, `docs/README.md`, `docs/TECH_STACK.md`.
 - 2026-04-09: План развития вынесен в `docs/ROADMAP.md`; в контексте — ссылка после блока Next.
-- 2026-04-09: Уточнён статус Redis/BullMQ (инфра + зависимости без воркера); добавлен черновик «План развития»; обновлён Next п.1; стадия проекта в шапке.
+- 2026-04-09: Уточнён статус Redis/BullMQ (инфра + зависимости; воркер в коде подключён позже — см. Change Log 2026-04-14); добавлен черновик «План развития»; обновлён Next п.1; стадия проекта в шапке.
 - 2026-04-09: Добавлен `docs/BOT_ALGORITHM.md` — алгоритм работы бота и роль таблиц БД; ссылка в `README.md`.
 - 2026-04-09: Учтены `LLM_CONTEXT_MESSAGES` и `LLM_TIMEOUT_MS` в `DialogService` / `LlmService`; в README — подсказки по ускорению LLM.
 - 2026-04-09: Логи обработки входящих сообщений Telegram/WhatsApp (этапы и тайминги) включены только в dev (`NODE_ENV=development`).

@@ -1,5 +1,6 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { forwardRef, Inject, Injectable, Logger } from "@nestjs/common";
 import { performance } from "node:perf_hooks";
+import { DialogQueueService } from "../dialog-queue/dialog-queue.service";
 import { DialogService } from "../dialog/dialog.service";
 import { DialogOutput } from "../dialog/dialog.types";
 import { IdempotencyService } from "../idempotency/idempotency.service";
@@ -15,6 +16,8 @@ export class TelegramService {
   constructor(
     private readonly dialogService: DialogService,
     private readonly idempotencyService: IdempotencyService,
+    @Inject(forwardRef(() => DialogQueueService))
+    private readonly dialogQueueService: DialogQueueService,
   ) {}
 
   extractMessage(payload: TelegramWebhookPayload): IncomingTelegramMessage | null {
@@ -58,6 +61,34 @@ export class TelegramService {
       );
     }
 
+    if (this.dialogQueueService.isEnabled()) {
+      try {
+        await this.dialogQueueService.enqueue({
+          channel: "telegram",
+          ...message,
+        });
+      } catch (e) {
+        await this.idempotencyService.revert("telegram", message.messageId?.toString());
+        throw e;
+      }
+      if (dev) {
+        this.logger.log(
+          `[Telegram] enqueued chatId=${message.chatId} messageId=${message.messageId ?? "n/a"} (${Math.round(performance.now() - flowStarted)}ms to ack path)`,
+        );
+      }
+      return;
+    }
+
+    await this.processInboundQueued(message, flowStarted);
+  }
+
+  /** Тяжёлая обработка: LLM + отправка ответа (вебхук или воркер очереди). */
+  async processInboundQueued(
+    message: IncomingTelegramMessage,
+    flowStarted?: number,
+  ): Promise<void> {
+    const dev = isDevelopment();
+    const flowT0 = flowStarted ?? (dev ? performance.now() : 0);
     const dialogStarted = dev ? performance.now() : 0;
     const stopTyping = this.startTypingIndicator(message.chatId);
     let result: DialogOutput;
@@ -81,7 +112,7 @@ export class TelegramService {
     const sent = await this.sendMessage(message.chatId, result.replyText);
     if (dev) {
       const sendMs = Math.round(performance.now() - sendStarted);
-      const totalMs = Math.round(performance.now() - flowStarted);
+      const totalMs = Math.round(performance.now() - flowT0);
       this.logger.log(
         `[Telegram] 3/3 ${sent ? "reply sent to bot" : "reply NOT sent (see errors above)"} chatId=${message.chatId} in ${sendMs}ms | total ${totalMs}ms (webhook → user sees message)`,
       );
