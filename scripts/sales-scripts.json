@@ -7,7 +7,7 @@
       "Передаю ваш запрос профильному менеджеру, чтобы дать максимально точный ответ.",
       "Оставайтесь на связи, пожалуйста."
     ],
-    "rules": [
+    "handOffTriggers": [
       { "containsAny": ["менеджер", "оператор", "человек"], "reason": "client_requested_human" },
       { "containsAny": ["жалоба", "претензия", "недоволен"], "reason": "negative_escalation" },
       { "containsAny": ["индивидуально", "нестандарт", "особые условия"], "reason": "custom_conditions_request" }

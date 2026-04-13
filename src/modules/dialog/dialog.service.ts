@@ -25,7 +25,7 @@ interface StageConfig {
 interface HandoffConfig {
   nextAction: string;
   replyLines: string[];
-  rules: HandoffRule[];
+  handOffTriggers: HandoffRule[];
 }
 
 interface SalesScriptsConfig {
@@ -181,7 +181,7 @@ export class DialogService {
 
   private detectHandoffReason(text: string): string | null {
     const normalized = text.toLowerCase();
-    for (const rule of this.config.handoff?.rules ?? []) {
+    for (const rule of this.config.handoff?.handOffTriggers ?? []) {
       const matched = rule.containsAny.some((word) => normalized.includes(word));
       if (matched) {
         return rule.reason;
@@ -351,7 +351,7 @@ export class DialogService {
           "Передаю ваш запрос профильному менеджеру, чтобы дать максимально точный ответ.",
           "Оставайтесь на связи, пожалуйста.",
         ],
-        rules: [],
+        handOffTriggers: [],
       },
       stages: {
         contact: {

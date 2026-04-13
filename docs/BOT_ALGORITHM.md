@@ -82,7 +82,7 @@ sequenceDiagram
 
 Путь к файлу задаётся сборкой бота: **`salesScriptsPath`** в `config/configurations/<BOT_CONFIGURATION>.json` (например `scripts/daria-mokko/sales-scripts.json` или `scripts/sales-scripts.json` для конфигурации `default`). При старте приложения файл читается один раз в `DialogService`.
 
-- **Handoff**: если текст совпал с `handoff.rules` → причина handoff, ответ из `handoff.replyLines`, **LLM не вызывается**.
+- **Handoff**: если текст совпал с `handoff.handOffTriggers` → причина handoff, ответ из `handoff.replyLines`, **LLM не вызывается**.
 - Иначе **этап воронки** (`stage`): правила `rules` (подстроки → `setStage`) и логика перехода с дефолтного этапа (например на `qualification`).
 - Формируется **шаблонный ответ** для этапа — используется как текст ответа при отключённом LLM, ошибке или таймауте.
 

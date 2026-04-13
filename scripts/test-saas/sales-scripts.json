@@ -7,7 +7,7 @@
       "Передаю запрос в отдел продаж / интеграций — подберут точную архитектуру под ваш стек.",
       "Ожидайте ответа в рабочее время."
     ],
-    "rules": [
+    "handOffTriggers": [
       { "containsAny": ["интеграция", "api", "1с"], "reason": "integration_request" },
       { "containsAny": ["менеджер", "инженер", "демо"], "reason": "demo_or_human" },
       { "containsAny": ["жалоба", "не работает", "сбой"], "reason": "support_escalation" }
