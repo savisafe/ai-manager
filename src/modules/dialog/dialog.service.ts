@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, OnModuleInit } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { LlmChatMessage, LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { BotConfigurationService } from "../bot-configuration/bot-configuration.service";
 import { PromptProfileService } from "../prompt-profile/prompt-profile.service";
+import { ResolvedLlmPromptProfile } from "../prompt-profile/prompt-profile.types";
 import { ChannelType, DialogInput, DialogOutput } from "./dialog.types";
 
 interface SalesRule {
@@ -37,8 +38,11 @@ interface SalesScriptsConfig {
 }
 
 @Injectable()
-export class DialogService {
+export class DialogService implements OnModuleInit {
   private readonly config: SalesScriptsConfig;
+  /** Статическая часть system prompt (без канала и этапа воронки). */
+  private llmSystemPromptPrefix = "";
+  private llmSystemPromptSuffix = "";
 
   constructor(
     private readonly prisma: PrismaService,
@@ -47,6 +51,10 @@ export class DialogService {
     private readonly botConfiguration: BotConfigurationService,
   ) {
     this.config = this.loadConfig();
+  }
+
+  onModuleInit() {
+    this.refreshLlmSystemPromptStaticParts();
   }
 
   async process(input: DialogInput): Promise<DialogOutput> {
@@ -207,8 +215,17 @@ export class DialogService {
     return out ?? templateFallback;
   }
 
+  private refreshLlmSystemPromptStaticParts() {
+    const { prefix, suffix } = this.buildLlmSystemPromptStaticParts(this.promptProfile.getProfile());
+    this.llmSystemPromptPrefix = prefix;
+    this.llmSystemPromptSuffix = suffix;
+  }
+
   private buildSystemPrompt(stage: string, channel: ChannelType): string {
-    const p = this.promptProfile.getProfile();
+    return `${this.llmSystemPromptPrefix}Канал: ${channel}. Текущий этап воронки: ${stage}.\n${this.llmSystemPromptSuffix}`;
+  }
+
+  private buildLlmSystemPromptStaticParts(p: ResolvedLlmPromptProfile): { prefix: string; suffix: string } {
     const company = p.companyName;
     const topic = p.topic;
     const forbidden = p.forbiddenTopics;
@@ -217,13 +234,17 @@ export class DialogService {
     const primaryGoals = p.primaryGoals ?? [];
     const lang = p.language ?? "русский";
 
-    const lines: string[] = [];
+    const prefixLines: string[] = [];
     if (p.persona) {
-      lines.push(p.persona);
+      prefixLines.push(p.persona);
     } else {
-      lines.push(`Ты — AI-менеджер компании ${company}.`);
+      //TODO hardcode
+      prefixLines.push(`Ты — AI-менеджер компании ${company}.`);
     }
-    lines.push(`Канал: ${channel}. Текущий этап воронки: ${stage}.`, `Основной язык ответов: ${lang}.`, "");
+    const prefix = `${prefixLines.join("\n")}\n`;
+
+    const lines: string[] = [];
+    lines.push(`Основной язык ответов: ${lang}.`, "");
 
     if (primaryGoals.length > 0) {
       lines.push("Цели в этом чате:", ...primaryGoals.map((g) => `- ${g}`), "");
@@ -237,13 +258,10 @@ export class DialogService {
 
     if (topic) {
       lines.push(
-        "Рамка темы (держись только её; не уходи в общие разговоры):",
+        "Рамка темы (только она, без общих отступлений):",
         topic,
         "",
-        "Если вопрос вне этой темы:",
-        "- За 1–2 коротких предложения вежливо скажи, что это вне компетенции в чате.",
-        "- Сразу верни разговор к задаче клиента в рамках темы выше или предложи передать вопрос менеджеру.",
-        "- Не давай советов по сторонним областям (медицина, юриспруденция, инвестиции и т.п.), если это не напрямую связано с продуктом в рамке темы.",
+        "Вне темы: за 1–2 фразы вежливо откажи, верни к продукту или предложи менеджера; не советуй по медицине, юриспруденции, инвестициям и т.п. вне рамки продукта.",
       );
     }
 
@@ -260,22 +278,20 @@ export class DialogService {
     }
 
     if (scopeFromFile) {
-      lines.push("", "Дополнительные инструкции компании (приоритетны для фактов о продукте):", scopeFromFile);
+      lines.push("", "Факты и инструкции компании (приоритет):", scopeFromFile);
     }
 
     if (p.bookingAndContact) {
-      lines.push("", "Запись и контакты (без выдуманных данных):", p.bookingAndContact);
+      lines.push("", "Запись и контакты (не выдумывай данные):", p.bookingAndContact);
     }
 
     if (p.humanLikeMode) {
       lines.push(
         "",
         "Режим «как живой человек» (тема и факты не ослабляй):",
-        "- Меняй формулировки от сообщения к сообщению; избегай одних и тех же шаблонных вступлений подряд.",
-        "- Допустимы мягкие связки и разговорный тон там, где уместно; без канцелярита и «отчётного» списка ради списка.",
-        "- Не превращай каждый ответ в маркированный FAQ: в мессенджере лучше 1–2 живых абзаца, списки — только если клиенту так проще воспринять.",
-        "- Кратко покажи, что услышал запрос, без воды и без избыточных извинений.",
-        "- Смайлики — по минимуму (один нейтральный или без них); без канцелярского «рад вас видеть» в каждом сообщении.",
+        "- Меняй формулировки, избегай шаблонных вступлений подряд; допустим разговорный тон, без канцелярита и «отчётных» списков ради списка.",
+        "- Не превращай каждый ответ в FAQ: 1–2 живых абзаца; покажи, что услышал запрос, без воды и лишних извинений.",
+        "- Смайлики по минимуму (один нейтральный или без них); без «рад видеть» в каждом сообщении.",
       );
     }
 
@@ -300,7 +316,7 @@ export class DialogService {
       }
     }
 
-    return lines.join("\n");
+    return { prefix, suffix: lines.join("\n") };
   }
 
   /** Сколько последних сообщений диалога отдавать в LLM (меньше — быстрее префилл и инференс). */
