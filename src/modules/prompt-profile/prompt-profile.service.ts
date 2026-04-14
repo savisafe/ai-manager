@@ -15,7 +15,7 @@ export class PromptProfileService implements OnModuleInit {
     const id = this.botConfiguration.get().llmPromptProfile;
     this.profile = this.loadResolvedProfile(id);
     this.logger.log(
-      `LLM prompt profile "${this.profile.id}" (company="${this.profile.companyName}"${this.profile.humanLikeMode ? ", human-like mode" : ""})`,
+      `LLM prompt profile "${this.profile.id}" (company="${this.profile.companyName}"${this.profile.humanLikeMode ? ", human-like mode" : ""}${this.profile.openTopicsMode ? ", open topics" : ""})`,
     );
   }
 
@@ -79,6 +79,11 @@ export class PromptProfileService implements OnModuleInit {
       rawHuman === true ||
       (typeof rawHuman === "string" && rawHuman.trim().toLowerCase() === "true");
 
+    const rawOpen = raw.openTopicsMode;
+    const openTopicsMode =
+      rawOpen === true ||
+      (typeof rawOpen === "string" && rawOpen.trim().toLowerCase() === "true");
+
     let scopeText: string | undefined;
     if (typeof raw.scopeFile === "string" && raw.scopeFile.trim().length > 0) {
       scopeText = this.readScopeFile(raw.scopeFile.trim()) ?? undefined;
@@ -97,6 +102,7 @@ export class PromptProfileService implements OnModuleInit {
       bookingAndContact,
       additionalStyleRules: additionalStyleRules.length > 0 ? additionalStyleRules : undefined,
       humanLikeMode: humanLikeMode ? true : undefined,
+      openTopicsMode: openTopicsMode ? true : undefined,
       scopeText,
     };
   }

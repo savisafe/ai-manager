@@ -1,0 +1,4 @@
+{
+  "llmPromptProfile": "open-topics",
+  "salesScriptsPath": "scripts/open-topics/sales-scripts.json"
+}

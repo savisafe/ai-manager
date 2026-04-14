@@ -222,7 +222,11 @@ export class DialogService implements OnModuleInit {
   }
 
   private buildSystemPrompt(stage: string, channel: ChannelType): string {
-    return `${this.llmSystemPromptPrefix}Канал: ${channel}. Текущий этап воронки: ${stage}.\n${this.llmSystemPromptSuffix}`;
+    const open = this.promptProfile.getProfile().openTopicsMode;
+    const stageLine = open
+      ? "Режим: свободный диалог (без воронки продаж)."
+      : `Текущий этап воронки: ${stage}.`;
+    return `${this.llmSystemPromptPrefix}Канал: ${channel}. ${stageLine}\n${this.llmSystemPromptSuffix}`;
   }
 
   private buildLlmSystemPromptStaticParts(p: ResolvedLlmPromptProfile): { prefix: string; suffix: string } {
@@ -248,6 +252,11 @@ export class DialogService implements OnModuleInit {
 
     if (primaryGoals.length > 0) {
       lines.push("Цели в этом чате:", ...primaryGoals.map((g) => `- ${g}`), "");
+    } else if (p.openTopicsMode) {
+      lines.push(
+        "Твоя цель: вести полезный и уважительный диалог по теме собеседника, без навязывания продукта.",
+        "",
+      );
     } else {
       lines.push("Твоя цель: помогать клиентам в чате, консультировать и продавать по скриптам без давления.", "");
     }
@@ -299,16 +308,29 @@ export class DialogService implements OnModuleInit {
       ? "- Пиши коротко и по-человечески: дружелюбно, без сухого отчёта."
       : "- Пиши коротко, дружелюбно.";
 
-    lines.push(
-      "",
-      "Правила стиля и продаж:",
-      styleLead,
-      "- Сначала уточняй потребность, потом предлагай решение.",
-      "- Не выдумывай цены, сроки и условия; если данных нет — скажи, что уточнит менеджер.",
-      p.humanLikeMode
-        ? "- В конце — один ясный следующий шаг или вопрос; не обязательно «официальное» закрытие абзаца."
-        : "- Один ответ = несколько коротких абзацев, в конце один конкретный следующий шаг.",
-    );
+    if (p.openTopicsMode) {
+      lines.push(
+        "",
+        "Правила стиля:",
+        styleLead,
+        "- Развивай беседу по запросу пользователя; не уводи насильно к продаже или к одной нише.",
+        "- Не выдавай за факт то, чего не знаешь; при сложных вопросах (медицина, право, финансы) — общая информация и рекомендация обратиться к специалисту, без диагнозов и юридических заключений.",
+        p.humanLikeMode
+          ? "- В конце можно один уточняющий вопрос или предложение продолжить тему — по ситуации."
+          : "- Один ответ = несколько коротких абзацев по делу.",
+      );
+    } else {
+      lines.push(
+        "",
+        "Правила стиля и продаж:",
+        styleLead,
+        "- Сначала уточняй потребность, потом предлагай решение.",
+        "- Не выдумывай цены, сроки и условия; если данных нет — скажи, что уточнит менеджер.",
+        p.humanLikeMode
+          ? "- В конце — один ясный следующий шаг или вопрос; не обязательно «официальное» закрытие абзаца."
+          : "- Один ответ = несколько коротких абзацев, в конце один конкретный следующий шаг.",
+      );
+    }
 
     if (p.additionalStyleRules?.length) {
       for (const rule of p.additionalStyleRules) {

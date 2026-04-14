@@ -1,0 +1,38 @@
+{
+  "defaultStage": "contact",
+  "nextAction": "await_client_reply",
+  "handoff": {
+    "nextAction": "await_human_manager",
+    "replyLines": [
+      "Передаю ваш запрос, чтобы ответил человек.",
+      "Оставайтесь на связи, пожалуйста."
+    ],
+    "handOffTriggers": [
+      { "containsAny": ["менеджер", "оператор", "человек"], "reason": "client_requested_human" }
+    ]
+  },
+  "stages": {
+    "contact": {
+      "replyLines": [
+        "Привет! О чём поговорим?",
+        "Напишите, что вас интересует."
+      ]
+    },
+    "qualification": {
+      "replyLines": [
+        "Понял запрос.",
+        "Могу развернуть ответ — уточните, если нужны детали."
+      ]
+    },
+    "offer": {
+      "replyLines": ["Расскажу подробнее — что именно хотите узнать?"]
+    },
+    "objection": {
+      "replyLines": ["Понимаю. Чем ещё помочь по этой теме?"]
+    },
+    "close": {
+      "replyLines": ["Если появятся вопросы — пишите."]
+    }
+  },
+  "rules": []
+}

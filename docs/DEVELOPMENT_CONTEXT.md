@@ -25,6 +25,8 @@
 - Профили системного промпта (`PromptProfileModule`): JSON в `config/prompt-profiles/`; идентификатор профиля задаётся через сборку бота (см. ниже) или fallback `LLM_PROMPT_PROFILE`; длина ответа — `LLM_MAX_TOKENS`.
 - **Конфигурации бота** (`BotConfigurationModule`, глобальный модуль): файл `config/configurations/<BOT_CONFIGURATION>.json` (переменная окружения `BOT_CONFIGURATION`, по умолчанию `default`). В сборке указываются `llmPromptProfile` (имя файла без `.json` из `prompt-profiles/`) и `salesScriptsPath` (путь к JSON скриптов продаж от корня репозитория). Пример готовых сборок: `daria-mokko` (студия), `test-saas`, `test-fitness` — для переключения ниши при тестах.
 - Расширенные поля профиля промпта: `persona`, `primaryGoals`, `servicesHighlight`, `neverDo`, `bookingAndContact`, `additionalStyleRules`, `language`, флаг **`humanLikeMode`** (более «живой» тон в системном промпте). Парсинг в `PromptProfileService`, сборка текста — `DialogService.buildSystemPrompt`.
+- Добавлен свободный режим диалога **`openTopicsMode`** в профиле промпта: без жёсткой рамки темы и без блока «правила продаж» в системном промпте; `DialogService.buildSystemPrompt` в этом режиме подставляет нейтральный маркер свободного диалога вместо этапа воронки.
+- Добавлены файлы для свободного режима: `config/prompt-profiles/open-topics.json`, `config/configurations/open-topics.json`, `scripts/open-topics/sales-scripts.json`; активация через `BOT_CONFIGURATION=open-topics`.
 - Резолв пользователя для диалога: `findFirst` по `channel` + `externalId` и `create` с обработкой гонки `P2002` (вместо `upsert` по составному unique в типах клиента).
 - Логи цепочки сообщения в Telegram/WhatsApp: шаги `1/3`–`3/3` (получено → диалог → отправка в API), разбивка времени и total «webhook → ответ ушёл в канал»; только при `NODE_ENV=development` (`src/modules/shared/is-development.ts`).
 - `LLM_CONTEXT_MESSAGES` ограничивает глубину истории в запросе к LLM; `LLM_TIMEOUT_MS` — `AbortSignal.timeout` на вызов Ollama, при срыве — fallback на скрипты.
@@ -46,6 +48,7 @@
 - Отдельный слой диалоговой логики: этапы воронки продаж.
 - Отдельный слой знаний/контента: FAQ, офферы, возражения.
 - Рамка LLM (компания, тема, запреты, опциональный `scopeFile`, режим «человечнее» и др.) — в файлах `config/prompt-profiles/*.json`; длинный текст не хранить в `.env`.
+- Для режима «на любые темы» использовать профиль с `openTopicsMode=true` (сборка `open-topics`), а не `default`.
 - Переключение «какой бот запущен» — **`BOT_CONFIGURATION`** → один JSON в `config/configurations/` связывает профиль промпта и путь к sales-скриптам; **`LLM_PROMPT_PROFILE`** используется как запасной вариант, если в сборке не задан `llmPromptProfile`.
 - Основной backend: NestJS (TypeScript), REST + webhook endpoints.
 - Хранение состояния и истории: PostgreSQL (через Prisma ORM).
@@ -59,6 +62,7 @@
 - Выбор финального поставщика LLM и политика контроля затрат.
 
 ## Change Log
+- 2026-04-14: Добавлен «свободный режим» (`openTopicsMode`) для диалога на любые темы: новые `config/prompt-profiles/open-topics.json`, `config/configurations/open-topics.json`, `scripts/open-topics/sales-scripts.json`; обновлены `PromptProfileService`/типы и сборка системного промпта в `DialogService` (в open-topics без «рамки темы» и без блока sales-правил).
 - 2026-04-14: **Очередь входящих (BullMQ) в продакшен-пути**: `dialog-inbound`, `processInboundQueued`, `IdempotencyService.revert` при сбое enqueue; `jobId` без `:` (`telegram-…`, `whatsapp-…`); экспорт `TelegramService` / `WhatsAppService`; `GET /health/queue`; dev-логи очереди; `HealthModule` → `DialogQueueModule`. Docker Compose: убраны `version` и жёсткие `container_name`. Параметры в `.env.example`. (Запись от 2026-04-09 про «Redis без воркера» устарела.)
 - 2026-04-14: Удалены таблица и модель Prisma `LeadState` (фактически дублировали последнее сообщение клиента; поля бюджета/сроков не использовались). Добавлена миграция `20260414120000_drop_lead_state`; убран `upsert` из `DialogService`; обновлён `docs/BOT_ALGORITHM.md`. После pull — `npx prisma migrate deploy` (или `migrate dev`).
 - 2026-04-14: В блоке `handoff` sales-скриптов ключ триггеров переименован: `rules` → `handOffTriggers` (все файлы в `scripts/**/sales-scripts.json`); `DialogService` и fallback-конфиг в коде читают `handOffTriggers`; обновлён `docs/BOT_ALGORITHM.md`. Ранее сохранённые копии JSON со `handoff.rules` нужно перевести на новый ключ.

@@ -20,6 +20,8 @@ export interface ResolvedLlmPromptProfile {
   additionalStyleRules?: string[];
   /** Более живой, разговорный тон (без потери деловитости и рамки темы) */
   humanLikeMode?: boolean;
+  /** Без ограничения темы и без промптов воронки продаж — общий ассистент */
+  openTopicsMode?: boolean;
   /** Текст из scopeFile, если задан и файл прочитан */
   scopeText?: string;
 }
@@ -37,5 +39,6 @@ export interface PromptProfileFileJson {
   additionalStyleRules?: string[];
   /** true / "true" в JSON — удобно при ручном редактировании */
   humanLikeMode?: boolean | string;
+  openTopicsMode?: boolean | string;
   scopeFile?: string | null;
 }
