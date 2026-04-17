@@ -1,6 +1,7 @@
 node_modules/
 dist/
 example-chats
+knowledge-base
 .idea
 .env
 .env.local

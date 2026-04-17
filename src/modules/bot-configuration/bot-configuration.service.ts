@@ -18,7 +18,7 @@ export class BotConfigurationService implements OnModuleInit {
 
   onModuleInit(): void {
     this.logger.log(
-      `Bot configuration "${this.resolved.id}" → promptProfile="${this.resolved.llmPromptProfile}", salesScripts="${this.resolved.salesScriptsPath}"`,
+      `Bot configuration "${this.resolved.id}" → promptProfile="${this.resolved.llmPromptProfile}", salesScripts="${this.resolved.salesScriptsPath}", useRag=${this.resolved.useRag}`,
     );
   }
 
@@ -56,10 +56,16 @@ export class BotConfigurationService implements OnModuleInit {
         ? raw.salesScriptsPath.trim()
         : undefined) ?? "scripts/sales-scripts.json";
 
+    const rawUseRag = raw.useRag;
+    const useRag =
+      rawUseRag === true ||
+      (typeof rawUseRag === "string" && rawUseRag.trim().toLowerCase() === "true");
+
     return {
       id: configurationId,
       llmPromptProfile,
       salesScriptsPath,
+      useRag,
     };
   }
 }

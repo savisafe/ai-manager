@@ -6,7 +6,9 @@ import { LlmChatMessage, LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { BotConfigurationService } from "../bot-configuration/bot-configuration.service";
 import { PromptProfileService } from "../prompt-profile/prompt-profile.service";
+import { RagService } from "../rag/rag.service";
 import { ResolvedLlmPromptProfile } from "../prompt-profile/prompt-profile.types";
+import { DEFAULT_STRICT_KNOWLEDGE_CONVERSATIONAL_PROMPT_ADDENDUM_LINES } from "../prompt-profile/strict-knowledge-conversational.defaults";
 import { ChannelType, DialogInput, DialogOutput } from "./dialog.types";
 
 interface SalesRule {
@@ -37,24 +39,33 @@ interface SalesScriptsConfig {
   rules: SalesRule[];
 }
 
+interface KnowledgeChunk {
+  id: number;
+  text: string;
+  tokens: Set<string>;
+}
+
 @Injectable()
 export class DialogService implements OnModuleInit {
   private readonly config: SalesScriptsConfig;
   /** Статическая часть system prompt (без канала и этапа воронки). */
   private llmSystemPromptPrefix = "";
   private llmSystemPromptSuffix = "";
+  private knowledgeChunks: KnowledgeChunk[] = [];
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly llmService: LlmService,
     private readonly promptProfile: PromptProfileService,
     private readonly botConfiguration: BotConfigurationService,
+    private readonly ragService: RagService,
   ) {
     this.config = this.loadConfig();
   }
 
   onModuleInit() {
     this.refreshLlmSystemPromptStaticParts();
+    this.refreshKnowledgeChunks();
   }
 
   async process(input: DialogInput): Promise<DialogOutput> {
@@ -78,7 +89,7 @@ export class DialogService implements OnModuleInit {
     const templateReply = this.buildReply(nextStage, input.text);
     const replyText = handoffReason
       ? this.buildHandoffReply()
-      : await this.tryLlmReply(conversation.id, nextStage, input.channel, templateReply);
+      : await this.tryLlmReply(conversation.id, nextStage, input.channel, templateReply, input.text);
     await this.prisma.conversation.update({
       where: { id: conversation.id },
       data: {
@@ -184,11 +195,41 @@ export class DialogService implements OnModuleInit {
     return null;
   }
 
+  /**
+   * Приветствия и мета-вопросы не требуют фрагментов БЗ — паттерны задаются в профиле
+   * (`strictKnowledgeConversationalBypass`), иначе strictKnowledgeMode даёт сухой noKnowledgeReply.
+   */
+  private isConversationalBypassStrictKnowledge(userText: string, profile: ResolvedLlmPromptProfile): boolean {
+    const cfg = profile.strictKnowledgeConversationalBypass;
+    if (!cfg || cfg.patterns.length === 0) {
+      return false;
+    }
+    const t = userText.trim().toLowerCase();
+    const maxLen = cfg.maxMessageLength;
+    if (t.length === 0 || t.length > maxLen) {
+      return false;
+    }
+    return cfg.patterns.some((re) => re.test(t));
+  }
+
+  private strictKnowledgeConversationalSystemAddendum(profile: ResolvedLlmPromptProfile): string {
+    const lines = profile.strictKnowledgeConversationalPromptAddendumLines;
+    const resolved =
+      lines === undefined
+        ? DEFAULT_STRICT_KNOWLEDGE_CONVERSATIONAL_PROMPT_ADDENDUM_LINES
+        : lines;
+    if (resolved.length === 0) {
+      return "";
+    }
+    return resolved.join("\n");
+  }
+
   private async tryLlmReply(
     conversationId: string,
     stage: string,
     channel: ChannelType,
     templateFallback: string,
+    userText: string,
   ): Promise<string> {
     if (!this.llmService.isEnabled()) {
       return templateFallback;
@@ -202,7 +243,24 @@ export class DialogService implements OnModuleInit {
     });
     rows.reverse();
 
-    const system = this.buildSystemPrompt(stage, channel);
+    const profile = this.promptProfile.getProfile();
+    const conversationalBypass =
+      Boolean(profile.strictKnowledgeMode && profile.scopeText) &&
+      this.isConversationalBypassStrictKnowledge(userText, profile);
+    const knowledgeContext = conversationalBypass
+      ? undefined
+      : await this.retrieveKnowledgeContext(userText);
+
+    if (profile.strictKnowledgeMode && profile.scopeText && !knowledgeContext && !conversationalBypass) {
+      return (
+        profile.noKnowledgeReply ??
+        "По этому запросу в подключённой базе не нашлось подходящего фрагмента. Переформулируйте вопрос или уточните тему — я подберу ответ из документа."
+      );
+    }
+
+    const system =
+      this.buildSystemPrompt(stage, channel, knowledgeContext) +
+      (conversationalBypass ? this.strictKnowledgeConversationalSystemAddendum(profile) : "");
     const messages: LlmChatMessage[] = [
       { role: "system", content: system },
       ...rows.map((m) => ({
@@ -221,12 +279,26 @@ export class DialogService implements OnModuleInit {
     this.llmSystemPromptSuffix = suffix;
   }
 
-  private buildSystemPrompt(stage: string, channel: ChannelType): string {
+  private refreshKnowledgeChunks() {
+    const p = this.promptProfile.getProfile();
+    if (!p.scopeText || p.scopeText.trim().length === 0) {
+      this.knowledgeChunks = [];
+      return;
+    }
+    const chunkSize = p.retrievalChunkSize ?? 1400;
+    const overlap = Math.min(p.retrievalChunkOverlap ?? 200, Math.max(0, chunkSize - 50));
+    this.knowledgeChunks = this.buildKnowledgeChunks(p.scopeText, chunkSize, overlap);
+  }
+
+  private buildSystemPrompt(stage: string, channel: ChannelType, knowledgeContext?: string): string {
     const open = this.promptProfile.getProfile().openTopicsMode;
     const stageLine = open
       ? "Режим: свободный диалог (без воронки продаж)."
       : `Текущий этап воронки: ${stage}.`;
-    return `${this.llmSystemPromptPrefix}Канал: ${channel}. ${stageLine}\n${this.llmSystemPromptSuffix}`;
+    const knowledgeBlock = knowledgeContext
+      ? `\n\nРелевантные фрагменты базы знаний для текущего запроса:\n${knowledgeContext}`
+      : "";
+    return `${this.llmSystemPromptPrefix}Канал: ${channel}. ${stageLine}\n${this.llmSystemPromptSuffix}${knowledgeBlock}`;
   }
 
   private buildLlmSystemPromptStaticParts(p: ResolvedLlmPromptProfile): { prefix: string; suffix: string } {
@@ -287,7 +359,16 @@ export class DialogService implements OnModuleInit {
     }
 
     if (scopeFromFile) {
-      lines.push("", "Факты и инструкции компании (приоритет):", scopeFromFile);
+      lines.push(
+        "",
+        "База знаний подключена. Используй только факты из релевантных фрагментов ниже по запросу пользователя.",
+      );
+      if (p.strictKnowledgeMode) {
+        lines.push(
+          "- Если релевантные фрагменты не переданы или в них нет ответа по сути вопроса: скажи это коротко и по-человечески, предложи переформулировать или уточнить тему.",
+          "- Не выдумывай нормы, пункты, подпункты, таблицы и числовые значения.",
+        );
+      }
     }
 
     if (p.bookingAndContact) {
@@ -363,6 +444,129 @@ export class DialogService implements OnModuleInit {
       ].join("\n");
     }
     return lines.join("\n");
+  }
+
+  private buildKnowledgeChunks(scopeText: string, chunkSize: number, overlap: number): KnowledgeChunk[] {
+    const normalized = scopeText.replace(/\r\n/g, "\n").trim();
+    if (!normalized) {
+      return [];
+    }
+
+    const chunks: KnowledgeChunk[] = [];
+    let start = 0;
+    let id = 1;
+    while (start < normalized.length) {
+      const end = Math.min(normalized.length, start + chunkSize);
+      const cut = this.findChunkBoundary(normalized, start, end);
+      const text = normalized.slice(start, cut).trim();
+      if (text.length > 0) {
+        chunks.push({ id, text, tokens: new Set(this.tokenizeForRetrieval(text)) });
+        id += 1;
+      }
+      if (cut >= normalized.length) {
+        break;
+      }
+      start = Math.max(cut - overlap, start + 1);
+    }
+    return chunks;
+  }
+
+  private findChunkBoundary(text: string, start: number, targetEnd: number): number {
+    if (targetEnd >= text.length) {
+      return text.length;
+    }
+    const breakpoints = ["\n\n", "\n", ". ", "; ", ", "];
+    for (const point of breakpoints) {
+      const idx = text.lastIndexOf(point, targetEnd);
+      if (idx > start + 200) {
+        return idx + point.length;
+      }
+    }
+    return targetEnd;
+  }
+
+  private async retrieveKnowledgeContext(userText: string): Promise<string | undefined> {
+    const config = this.botConfiguration.get();
+    
+    // Если включён RAG — используем векторный поиск
+    if (config.useRag) {
+      return await this.retrieveKnowledgeContextRag(userText);
+    }
+    
+    // Иначе — лексический поиск по токенам
+    if (this.knowledgeChunks.length === 0) {
+      return undefined;
+    }
+    const queryTokens = this.tokenizeForRetrieval(userText);
+    if (queryTokens.length === 0) {
+      return undefined;
+    }
+    const querySet = new Set(queryTokens);
+    const scored = this.knowledgeChunks
+      .map((chunk) => {
+        let overlap = 0;
+        for (const token of querySet) {
+          if (chunk.tokens.has(token)) {
+            overlap += 1;
+          }
+        }
+        return { chunk, overlap };
+      })
+      .filter((x) => x.overlap > 0)
+      .sort((a, b) => b.overlap - a.overlap || a.chunk.id - b.chunk.id);
+
+    if (scored.length === 0) {
+      return undefined;
+    }
+
+    const topK = this.promptProfile.getProfile().retrievalTopK ?? 3;
+    return scored
+      .slice(0, topK)
+      .map((x) => `[Фрагмент ${x.chunk.id}, совпадений: ${x.overlap}]\n${x.chunk.text}`)
+      .join("\n\n---\n\n");
+  }
+
+  private async retrieveKnowledgeContextRag(userText: string): Promise<string | undefined> {
+    const results = await this.ragService.search(userText, 3);
+    
+    if (results.length === 0) {
+      return undefined;
+    }
+
+    return results
+      .map((r, i) => `[Релевантность: ${(r.score * 100).toFixed(1)}%]\n${r.text}`)
+      .join("\n\n---\n\n");
+  }
+
+  private tokenizeForRetrieval(text: string): string[] {
+    const raw = text
+      .toLowerCase()
+      .replace(/ё/g, "е")
+      .split(/[^a-zа-я0-9.]+/i)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 2);
+    const stopWords = new Set([
+      "и",
+      "в",
+      "на",
+      "по",
+      "с",
+      "для",
+      "к",
+      "о",
+      "об",
+      "от",
+      "до",
+      "или",
+      "что",
+      "как",
+      "какой",
+      "какие",
+      "это",
+      "пункт",
+      "подпункт",
+    ]);
+    return raw.filter((t) => !stopWords.has(t));
   }
 
   private loadConfig(): SalesScriptsConfig {

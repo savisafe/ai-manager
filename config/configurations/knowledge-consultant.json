@@ -1,0 +1,5 @@
+{
+  "llmPromptProfile": "knowledge-consultant",
+  "salesScriptsPath": "scripts/sales-scripts.json",
+  "useRag": false
+}

@@ -24,6 +24,26 @@ export interface ResolvedLlmPromptProfile {
   openTopicsMode?: boolean;
   /** Текст из scopeFile, если задан и файл прочитан */
   scopeText?: string;
+  /** Строгий режим: отвечать только по найденным фрагментам базы знаний */
+  strictKnowledgeMode?: boolean;
+  /** Сообщение при отсутствии релевантной информации в базе знаний */
+  noKnowledgeReply?: string;
+  /** Размер чанка для простого retrieval */
+  retrievalChunkSize?: number;
+  /** Перекрытие между соседними чанками */
+  retrievalChunkOverlap?: number;
+  /** Максимум чанков, добавляемых в контекст ответа */
+  retrievalTopK?: number;
+  /**
+   * В strictKnowledgeMode: сообщения, совпавшие с одним из regex, идут в LLM без раннего noKnowledgeReply
+   * (при отсутствии фрагментов БЗ). Паттерны — строки RegExp с флагом `u` на стороне рантайма.
+   */
+  strictKnowledgeConversationalBypass?: {
+    maxMessageLength: number;
+    patterns: RegExp[];
+  };
+  /** Строки, добавляемые к system prompt при conversational bypass; если не задано — дефолт из кода профиля */
+  strictKnowledgeConversationalPromptAddendumLines?: string[];
 }
 
 export interface PromptProfileFileJson {
@@ -41,4 +61,19 @@ export interface PromptProfileFileJson {
   humanLikeMode?: boolean | string;
   openTopicsMode?: boolean | string;
   scopeFile?: string | null;
+  strictKnowledgeMode?: boolean | string;
+  noKnowledgeReply?: string | null;
+  retrievalChunkSize?: number | string | null;
+  retrievalChunkOverlap?: number | string | null;
+  retrievalTopK?: number | string | null;
+  /**
+   * Регулярки (строки без обрамления /.../): при strictKnowledgeMode переопределяют дефолтные паттерны.
+   * Пустой массив — отключить обход (всегда noKnowledgeReply при пустом контексте).
+   */
+  strictKnowledgeConversationalBypass?: {
+    maxMessageLength?: number | string | null;
+    patterns?: string[] | null;
+  } | null;
+  /** Кастомный текст к system prompt при обходе; пустой массив — без доп. блока */
+  strictKnowledgeConversationalPromptAddendum?: string[] | null;
 }
