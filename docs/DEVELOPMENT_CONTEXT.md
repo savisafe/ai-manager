@@ -32,6 +32,10 @@
 - `LLM_CONTEXT_MESSAGES` ограничивает глубину истории в запросе к LLM; `LLM_TIMEOUT_MS` — `AbortSignal.timeout` на вызов Ollama, при срыве — fallback на скрипты.
 - Документация запуска: `README.md` (ngrok, Telegram/WhatsApp, Ollama, Prisma, профили промпта).
 - Описание потока бота: `docs/BOT_ALGORITHM.md` (вебхук → при включённой очереди: Redis job → воркер → БД → LLM → канал; иначе синхронно в вебхуке).
+- **RAG** (`RagModule`, `RagService`): опционально для сборки бота (`useRag` в `config/configurations/<id>.json`). Векторный поиск по тексту из `scopeFile` профиля: эмбеддинги `@xenova/transformers` (MiniLM), SQLite in-memory + `sqlite-vec`; `DialogService.retrieveKnowledgeContext` при `useRag: true` вызывает `ragService.search`, иначе — лексический матч по чанкам. `DialogModule` импортирует `RagModule`, чтобы `RagService` инжектился в `DialogService`.
+- Режим **строгой базы знаний** в профиле промпта: `strictKnowledgeMode`, опциональный `scopeFile` (длинный текст в контекст LLM / индексация), `noKnowledgeReply` при отсутствии релевантных фрагментов.
+- **Разговорный обход** strict-режима (`strictKnowledgeConversationalBypass` в `config/prompt-profiles/*.json`): список regex-строк (флаг `u` при компиляции в `PromptProfileService`), `maxMessageLength`, опционально `strictKnowledgeConversationalPromptAddendum` — строки к system prompt. Дефолтные паттерны и текст доп. блока — `src/modules/prompt-profile/strict-knowledge-conversational.defaults.ts`. Важно: в JS **не использовать `\b` в паттернах под кириллицу** (word boundary только для ASCII-«слов»); при совпадении обхода поиск по БЗ для этого сообщения **не** вызывается, чтобы случайные чанки не тянули ответ «нет в базе».
+- Скрипты инфраструктуры: `npm run db:up` / `db:down` — `docker compose` для PostgreSQL и Redis. Подключение Prisma при старте: повторные попытки с паузой (`PRISMA_CONNECT_MAX_ATTEMPTS`, `PRISMA_CONNECT_RETRY_DELAY_MS`), чтобы пережить медленный старт контейнера.
 
 ## In Progress
 - Уточнение sales-FSM логики и A/B вариантов скриптов.
@@ -47,7 +51,7 @@
 - Единый слой каналов: адаптеры для каждого мессенджера.
 - Отдельный слой диалоговой логики: этапы воронки продаж.
 - Отдельный слой знаний/контента: FAQ, офферы, возражения.
-- Рамка LLM (компания, тема, запреты, опциональный `scopeFile`, режим «человечнее» и др.) — в файлах `config/prompt-profiles/*.json`; длинный текст не хранить в `.env`.
+- Рамка LLM (компания, тема, запреты, опциональный `scopeFile`, режим «человечнее», strict/RAG и др.) — в файлах `config/prompt-profiles/*.json`; длинный текст не хранить в `.env`.
 - Для режима «на любые темы» использовать профиль с `openTopicsMode=true` (сборка `open-topics`), а не `default`.
 - Переключение «какой бот запущен» — **`BOT_CONFIGURATION`** → один JSON в `config/configurations/` связывает профиль промпта и путь к sales-скриптам; **`LLM_PROMPT_PROFILE`** используется как запасной вариант, если в сборке не задан `llmPromptProfile`.
 - Основной backend: NestJS (TypeScript), REST + webhook endpoints.
@@ -62,6 +66,7 @@
 - Выбор финального поставщика LLM и политика контроля затрат.
 
 ## Change Log
+- 2026-04-18: RAG (`RagModule`/`RagService`, `useRag` в конфиге бота); `DialogModule` импортирует `RagModule`. Режим консультанта по базе знаний: `strictKnowledgeMode`, разговорный обход без ложных отказов — паттерны в профиле или дефолты в `strict-knowledge-conversational.defaults.ts` (без `\b` для кириллицы; при обходе retrieval не вызывается). Смягчены тексты `noKnowledgeReply` / системного промпта при отсутствии фрагментов. Prisma: retry подключения к БД при старте; `npm run db:up` / `db:down`.
 - 2026-04-14: Добавлен «свободный режим» (`openTopicsMode`) для диалога на любые темы: новые `config/prompt-profiles/open-topics.json`, `config/configurations/open-topics.json`, `scripts/open-topics/sales-scripts.json`; обновлены `PromptProfileService`/типы и сборка системного промпта в `DialogService` (в open-topics без «рамки темы» и без блока sales-правил).
 - 2026-04-14: **Очередь входящих (BullMQ) в продакшен-пути**: `dialog-inbound`, `processInboundQueued`, `IdempotencyService.revert` при сбое enqueue; `jobId` без `:` (`telegram-…`, `whatsapp-…`); экспорт `TelegramService` / `WhatsAppService`; `GET /health/queue`; dev-логи очереди; `HealthModule` → `DialogQueueModule`. Docker Compose: убраны `version` и жёсткие `container_name`. Параметры в `.env.example`. (Запись от 2026-04-09 про «Redis без воркера» устарела.)
 - 2026-04-14: Удалены таблица и модель Prisma `LeadState` (фактически дублировали последнее сообщение клиента; поля бюджета/сроков не использовались). Добавлена миграция `20260414120000_drop_lead_state`; убран `upsert` из `DialogService`; обновлён `docs/BOT_ALGORITHM.md`. После pull — `npx prisma migrate deploy` (или `migrate dev`).
