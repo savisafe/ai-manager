@@ -61,3 +61,68 @@ model ProcessedInboundMessage {
 
   @@unique([channel, externalMessageId])
 }
+
+enum AdminRole {
+  ADMIN
+  MANAGER
+}
+
+/// Заготовка под multi-tenant: сейчас можно оставить пустым и не задавать tenantId у сущностей
+model Tenant {
+  id                String              @id @default(cuid())
+  slug              String              @unique
+  name              String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  botConfigurations BotConfiguration[]
+  promptProfiles    PromptProfile[]
+  salesScripts      SalesScript[]
+}
+
+/// Сборка бота (аналог config/configurations/<slug>.json), хранение в БД для админки
+model BotConfiguration {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  slug      String   @unique
+  name      String?
+  data      Json
+  version   Int      @default(1)
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PromptProfile {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  slug      String   @unique
+  data      Json
+  version   Int      @default(1)
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SalesScript {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  slug      String   @unique
+  data      Json
+  version   Int      @default(1)
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AdminUser {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  passwordHash     String
+  role             AdminRole @default(MANAGER)
+  refreshTokenHash String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}

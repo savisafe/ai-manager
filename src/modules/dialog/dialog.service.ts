@@ -5,53 +5,26 @@ import path from "node:path";
 import { LlmChatMessage, LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { BotConfigurationService } from "../bot-configuration/bot-configuration.service";
+import { ResolvedBotConfiguration } from "../bot-configuration/bot-configuration.types";
 import { PromptProfileService } from "../prompt-profile/prompt-profile.service";
 import { RagService } from "../rag/rag.service";
 import { ResolvedLlmPromptProfile } from "../prompt-profile/prompt-profile.types";
 import { DEFAULT_STRICT_KNOWLEDGE_CONVERSATIONAL_PROMPT_ADDENDUM_LINES } from "../prompt-profile/strict-knowledge-conversational.defaults";
-import { ChannelType, DialogInput, DialogOutput } from "./dialog.types";
-
-interface SalesRule {
-  containsAny: string[];
-  setStage: string;
-}
-
-interface HandoffRule {
-  containsAny: string[];
-  reason: string;
-}
-
-interface StageConfig {
-  replyLines: string[];
-}
-
-interface HandoffConfig {
-  nextAction: string;
-  replyLines: string[];
-  handOffTriggers: HandoffRule[];
-}
-
-interface SalesScriptsConfig {
-  defaultStage: string;
-  nextAction: string;
-  handoff?: HandoffConfig;
-  stages: Record<string, StageConfig>;
-  rules: SalesRule[];
-}
-
-interface KnowledgeChunk {
-  id: number;
-  text: string;
-  tokens: Set<string>;
-}
+import {
+  ChannelType,
+  DialogDiagnosticChunk,
+  DialogInput,
+  DialogOutput,
+  DialogOutputWithDiagnostics,
+  DialogRuntimeSnapshot,
+  KnowledgeChunkRuntime,
+} from "./dialog.types";
+import { SalesScriptsConfig } from "./sales-script-config.types";
 
 @Injectable()
 export class DialogService implements OnModuleInit {
   private readonly config: SalesScriptsConfig;
-  /** Статическая часть system prompt (без канала и этапа воронки). */
-  private llmSystemPromptPrefix = "";
-  private llmSystemPromptSuffix = "";
-  private knowledgeChunks: KnowledgeChunk[] = [];
+  private defaultSnapshot!: DialogRuntimeSnapshot;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -64,11 +37,96 @@ export class DialogService implements OnModuleInit {
   }
 
   onModuleInit() {
-    this.refreshLlmSystemPromptStaticParts();
-    this.refreshKnowledgeChunks();
+    this.defaultSnapshot = this.composeSnapshot(
+      this.config,
+      this.promptProfile.getProfile(),
+      this.botConfiguration.get(),
+    );
+  }
+
+  /**
+   * Сборка снимка для админского теста или кастомного рантайма.
+   * Прод-путь использует defaultSnapshot из env/файлов на старте.
+   */
+  composeSnapshot(
+    sales: SalesScriptsConfig,
+    profile: ResolvedLlmPromptProfile,
+    bot: ResolvedBotConfiguration,
+  ): DialogRuntimeSnapshot {
+    const { prefix, suffix } = this.buildLlmSystemPromptStaticParts(profile);
+    const knowledgeChunks = this.computeKnowledgeChunksForProfile(profile);
+    return {
+      sales,
+      profile,
+      bot,
+      llmSystemPromptPrefix: prefix,
+      llmSystemPromptSuffix: suffix,
+      knowledgeChunks,
+    };
+  }
+
+  /**
+   * Один ход диалога с диагностикой (system prompt, retrieval).
+   * Не используется вебхуками; для POST /admin/test-dialog.
+   */
+  async runDiagnosticTurn(input: DialogInput, snapshot: DialogRuntimeSnapshot): Promise<DialogOutputWithDiagnostics> {
+    const { conversation } = await this.getOrCreateConversation(input.channel, input.externalUserId);
+
+    await this.prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        role: "client",
+        text: input.text,
+      },
+    });
+
+    const handoffReason = this.detectHandoffReason(input.text, snapshot.sales);
+    const nextStage = handoffReason ? "handoff" : this.detectStage(input.text, conversation.stage, snapshot.sales);
+    const templateReply = this.buildReply(nextStage, input.text, snapshot.sales);
+    const { replyText, diagnostics } = handoffReason
+      ? {
+          replyText: this.buildHandoffReply(snapshot.sales),
+          diagnostics: this.emptyDiagnostics(snapshot),
+        }
+      : await this.tryLlmReplyWithDiagnostics(
+          conversation.id,
+          nextStage,
+          input.channel,
+          templateReply,
+          input.text,
+          snapshot,
+        );
+
+    await this.prisma.conversation.update({
+      where: { id: conversation.id },
+      data: {
+        stage: nextStage,
+        status: handoffReason ? "HANDED_OFF" : "ACTIVE",
+      },
+    });
+
+    await this.prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        role: "assistant",
+        text: replyText,
+      },
+    });
+
+    if (handoffReason) {
+      await this.prisma.handoffEvent.create({
+        data: {
+          conversationId: conversation.id,
+          reason: handoffReason,
+        },
+      });
+    }
+
+    return { replyText, stage: nextStage, diagnostics };
   }
 
   async process(input: DialogInput): Promise<DialogOutput> {
+    const snap = this.defaultSnapshot;
     const { conversation } = await this.getOrCreateConversation(
       input.channel,
       input.externalUserId,
@@ -82,14 +140,14 @@ export class DialogService implements OnModuleInit {
       },
     });
 
-    const handoffReason = this.detectHandoffReason(input.text);
+    const handoffReason = this.detectHandoffReason(input.text, snap.sales);
     const nextStage = handoffReason
       ? "handoff"
-      : this.detectStage(input.text, conversation.stage);
-    const templateReply = this.buildReply(nextStage, input.text);
+      : this.detectStage(input.text, conversation.stage, snap.sales);
+    const templateReply = this.buildReply(nextStage, input.text, snap.sales);
     const replyText = handoffReason
-      ? this.buildHandoffReply()
-      : await this.tryLlmReply(conversation.id, nextStage, input.channel, templateReply, input.text);
+      ? this.buildHandoffReply(snap.sales)
+      : await this.tryLlmReply(conversation.id, nextStage, input.channel, templateReply, input.text, snap);
     await this.prisma.conversation.update({
       where: { id: conversation.id },
       data: {
@@ -164,29 +222,29 @@ export class DialogService implements OnModuleInit {
     }
   }
 
-  private detectStage(text: string, currentStage: string): string {
+  private detectStage(text: string, currentStage: string, sales: SalesScriptsConfig): string {
     const normalized = text.toLowerCase();
-    for (const rule of this.config.rules) {
+    for (const rule of sales.rules) {
       const matched = rule.containsAny.some((word) => normalized.includes(word));
       if (matched) {
         return rule.setStage;
       }
     }
-    if (currentStage === this.config.defaultStage) {
+    if (currentStage === sales.defaultStage) {
       return "qualification";
     }
     return currentStage;
   }
 
-  private buildReply(stage: string, clientText: string): string {
-    const fallback = this.config.stages[this.config.defaultStage];
-    const selected = this.config.stages[stage] ?? fallback;
+  private buildReply(stage: string, clientText: string, sales: SalesScriptsConfig): string {
+    const fallback = sales.stages[sales.defaultStage];
+    const selected = sales.stages[stage] ?? fallback;
     return selected.replyLines.map((line) => line.replace("{clientText}", clientText)).join("\n");
   }
 
-  private detectHandoffReason(text: string): string | null {
+  private detectHandoffReason(text: string, sales: SalesScriptsConfig): string | null {
     const normalized = text.toLowerCase();
-    for (const rule of this.config.handoff?.handOffTriggers ?? []) {
+    for (const rule of sales.handoff?.handOffTriggers ?? []) {
       const matched = rule.containsAny.some((word) => normalized.includes(word));
       if (matched) {
         return rule.reason;
@@ -230,9 +288,39 @@ export class DialogService implements OnModuleInit {
     channel: ChannelType,
     templateFallback: string,
     userText: string,
+    snap: DialogRuntimeSnapshot,
   ): Promise<string> {
+    const r = await this.tryLlmReplyCore(conversationId, stage, channel, templateFallback, userText, snap);
+    return r.replyText;
+  }
+
+  private async tryLlmReplyWithDiagnostics(
+    conversationId: string,
+    stage: string,
+    channel: ChannelType,
+    templateFallback: string,
+    userText: string,
+    snap: DialogRuntimeSnapshot,
+  ): Promise<{ replyText: string; diagnostics: DialogOutputWithDiagnostics["diagnostics"] }> {
+    return this.tryLlmReplyCore(conversationId, stage, channel, templateFallback, userText, snap);
+  }
+
+  private async tryLlmReplyCore(
+    conversationId: string,
+    stage: string,
+    channel: ChannelType,
+    templateFallback: string,
+    userText: string,
+    snap: DialogRuntimeSnapshot,
+  ): Promise<{
+    replyText: string;
+    diagnostics: DialogOutputWithDiagnostics["diagnostics"];
+  }> {
     if (!this.llmService.isEnabled()) {
-      return templateFallback;
+      return {
+        replyText: templateFallback,
+        diagnostics: await this.buildDiagnosticsForDisabledLlm(snap, stage, channel),
+      };
     }
 
     const contextLimit = this.getLlmContextMessageLimit();
@@ -243,23 +331,36 @@ export class DialogService implements OnModuleInit {
     });
     rows.reverse();
 
-    const profile = this.promptProfile.getProfile();
+    const profile = snap.profile;
     const conversationalBypass =
       Boolean(profile.strictKnowledgeMode && profile.scopeText) &&
       this.isConversationalBypassStrictKnowledge(userText, profile);
-    const knowledgeContext = conversationalBypass
-      ? undefined
-      : await this.retrieveKnowledgeContext(userText);
+    const retrieval = conversationalBypass
+      ? { context: undefined as string | undefined, mode: "none" as const, chunks: [] as DialogDiagnosticChunk[] }
+      : await this.retrieveKnowledgeContextDetailed(userText, snap);
+
+    const knowledgeContext = retrieval.context;
 
     if (profile.strictKnowledgeMode && profile.scopeText && !knowledgeContext && !conversationalBypass) {
-      return (
+      const replyText =
         profile.noKnowledgeReply ??
-        "По этому запросу в подключённой базе не нашлось подходящего фрагмента. Переформулируйте вопрос или уточните тему — я подберу ответ из документа."
-      );
+        "По этому запросу в подключённой базе не нашлось подходящего фрагмента. Переформулируйте вопрос или уточните тему — я подберу ответ из документа.";
+      const system =
+        this.buildSystemPrompt(stage, channel, undefined, snap) +
+        (conversationalBypass ? this.strictKnowledgeConversationalSystemAddendum(profile) : "");
+      return {
+        replyText,
+        diagnostics: {
+          systemPrompt: system,
+          knowledgeContext,
+          chunks: retrieval.chunks,
+          retrievalMode: retrieval.mode,
+        },
+      };
     }
 
     const system =
-      this.buildSystemPrompt(stage, channel, knowledgeContext) +
+      this.buildSystemPrompt(stage, channel, knowledgeContext, snap) +
       (conversationalBypass ? this.strictKnowledgeConversationalSystemAddendum(profile) : "");
     const messages: LlmChatMessage[] = [
       { role: "system", content: system },
@@ -270,35 +371,55 @@ export class DialogService implements OnModuleInit {
     ];
 
     const out = await this.llmService.complete(messages);
-    return out ?? templateFallback;
+    const replyText = out ?? templateFallback;
+    return {
+      replyText,
+      diagnostics: {
+        systemPrompt: system,
+        knowledgeContext,
+        chunks: retrieval.chunks,
+        retrievalMode: retrieval.mode,
+      },
+    };
   }
 
-  private refreshLlmSystemPromptStaticParts() {
-    const { prefix, suffix } = this.buildLlmSystemPromptStaticParts(this.promptProfile.getProfile());
-    this.llmSystemPromptPrefix = prefix;
-    this.llmSystemPromptSuffix = suffix;
+  private emptyDiagnostics(snap: DialogRuntimeSnapshot): DialogOutputWithDiagnostics["diagnostics"] {
+    const system = this.buildSystemPrompt("contact", "telegram", undefined, snap);
+    return { systemPrompt: system, chunks: [], retrievalMode: "none" };
   }
 
-  private refreshKnowledgeChunks() {
-    const p = this.promptProfile.getProfile();
+  private async buildDiagnosticsForDisabledLlm(
+    snap: DialogRuntimeSnapshot,
+    stage: string,
+    channel: ChannelType,
+  ): Promise<DialogOutputWithDiagnostics["diagnostics"]> {
+    const system = this.buildSystemPrompt(stage, channel, undefined, snap);
+    return { systemPrompt: system, chunks: [], retrievalMode: "none" };
+  }
+
+  private computeKnowledgeChunksForProfile(p: ResolvedLlmPromptProfile): KnowledgeChunkRuntime[] {
     if (!p.scopeText || p.scopeText.trim().length === 0) {
-      this.knowledgeChunks = [];
-      return;
+      return [];
     }
     const chunkSize = p.retrievalChunkSize ?? 1400;
     const overlap = Math.min(p.retrievalChunkOverlap ?? 200, Math.max(0, chunkSize - 50));
-    this.knowledgeChunks = this.buildKnowledgeChunks(p.scopeText, chunkSize, overlap);
+    return this.buildKnowledgeChunks(p.scopeText, chunkSize, overlap);
   }
 
-  private buildSystemPrompt(stage: string, channel: ChannelType, knowledgeContext?: string): string {
-    const open = this.promptProfile.getProfile().openTopicsMode;
+  private buildSystemPrompt(
+    stage: string,
+    channel: ChannelType,
+    knowledgeContext: string | undefined,
+    snap: DialogRuntimeSnapshot,
+  ): string {
+    const open = snap.profile.openTopicsMode;
     const stageLine = open
       ? "Режим: свободный диалог (без воронки продаж)."
       : `Текущий этап воронки: ${stage}.`;
     const knowledgeBlock = knowledgeContext
       ? `\n\nРелевантные фрагменты базы знаний для текущего запроса:\n${knowledgeContext}`
       : "";
-    return `${this.llmSystemPromptPrefix}Канал: ${channel}. ${stageLine}\n${this.llmSystemPromptSuffix}${knowledgeBlock}`;
+    return `${snap.llmSystemPromptPrefix}Канал: ${channel}. ${stageLine}\n${snap.llmSystemPromptSuffix}${knowledgeBlock}`;
   }
 
   private buildLlmSystemPromptStaticParts(p: ResolvedLlmPromptProfile): { prefix: string; suffix: string } {
@@ -435,8 +556,8 @@ export class DialogService implements OnModuleInit {
     return Math.min(50, Math.max(2, Math.floor(n)));
   }
 
-  private buildHandoffReply(): string {
-    const lines = this.config.handoff?.replyLines;
+  private buildHandoffReply(sales: SalesScriptsConfig): string {
+    const lines = sales.handoff?.replyLines;
     if (!lines || lines.length === 0) {
       return [
         "Передаю ваш запрос профильному менеджеру, чтобы дать максимально точный ответ.",
@@ -446,13 +567,13 @@ export class DialogService implements OnModuleInit {
     return lines.join("\n");
   }
 
-  private buildKnowledgeChunks(scopeText: string, chunkSize: number, overlap: number): KnowledgeChunk[] {
+  private buildKnowledgeChunks(scopeText: string, chunkSize: number, overlap: number): KnowledgeChunkRuntime[] {
     const normalized = scopeText.replace(/\r\n/g, "\n").trim();
     if (!normalized) {
       return [];
     }
 
-    const chunks: KnowledgeChunk[] = [];
+    const chunks: KnowledgeChunkRuntime[] = [];
     let start = 0;
     let id = 1;
     while (start < normalized.length) {
@@ -485,24 +606,34 @@ export class DialogService implements OnModuleInit {
     return targetEnd;
   }
 
-  private async retrieveKnowledgeContext(userText: string): Promise<string | undefined> {
-    const config = this.botConfiguration.get();
-    
-    // Если включён RAG — используем векторный поиск
-    if (config.useRag) {
-      return await this.retrieveKnowledgeContextRag(userText);
+  private async retrieveKnowledgeContextDetailed(
+    userText: string,
+    snap: DialogRuntimeSnapshot,
+  ): Promise<{ context?: string; mode: "none" | "lexical" | "rag"; chunks: DialogDiagnosticChunk[] }> {
+    if (snap.bot.useRag && this.ragService.isInitialized()) {
+      const topK = snap.profile.retrievalTopK ?? 3;
+      const results = await this.ragService.search(userText, topK);
+      if (results.length === 0) {
+        return { mode: "rag", chunks: [] };
+      }
+      return {
+        mode: "rag",
+        context: results
+          .map((r) => `[Релевантность: ${(r.score * 100).toFixed(1)}%]\n${r.text}`)
+          .join("\n\n---\n\n"),
+        chunks: results.map((r) => ({ text: r.text, score: r.score })),
+      };
     }
-    
-    // Иначе — лексический поиск по токенам
-    if (this.knowledgeChunks.length === 0) {
-      return undefined;
+
+    if (snap.knowledgeChunks.length === 0) {
+      return { mode: "none", chunks: [] };
     }
     const queryTokens = this.tokenizeForRetrieval(userText);
     if (queryTokens.length === 0) {
-      return undefined;
+      return { mode: "lexical", chunks: [] };
     }
     const querySet = new Set(queryTokens);
-    const scored = this.knowledgeChunks
+    const scored = snap.knowledgeChunks
       .map((chunk) => {
         let overlap = 0;
         for (const token of querySet) {
@@ -516,26 +647,18 @@ export class DialogService implements OnModuleInit {
       .sort((a, b) => b.overlap - a.overlap || a.chunk.id - b.chunk.id);
 
     if (scored.length === 0) {
-      return undefined;
+      return { mode: "lexical", chunks: [] };
     }
 
-    const topK = this.promptProfile.getProfile().retrievalTopK ?? 3;
-    return scored
-      .slice(0, topK)
-      .map((x) => `[Фрагмент ${x.chunk.id}, совпадений: ${x.overlap}]\n${x.chunk.text}`)
-      .join("\n\n---\n\n");
-  }
-
-  private async retrieveKnowledgeContextRag(userText: string): Promise<string | undefined> {
-    const results = await this.ragService.search(userText, 3);
-    
-    if (results.length === 0) {
-      return undefined;
-    }
-
-    return results
-      .map((r, i) => `[Релевантность: ${(r.score * 100).toFixed(1)}%]\n${r.text}`)
-      .join("\n\n---\n\n");
+    const topK = snap.profile.retrievalTopK ?? 3;
+    const top = scored.slice(0, topK);
+    return {
+      mode: "lexical",
+      context: top
+        .map((x) => `[Фрагмент ${x.chunk.id}, совпадений: ${x.overlap}]\n${x.chunk.text}`)
+        .join("\n\n---\n\n"),
+      chunks: top.map((x) => ({ id: x.chunk.id, text: x.chunk.text, overlap: x.overlap })),
+    };
   }
 
   private tokenizeForRetrieval(text: string): string[] {

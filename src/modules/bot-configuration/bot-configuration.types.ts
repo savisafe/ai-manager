@@ -6,6 +6,8 @@ export interface BotConfigurationFileJson {
   salesScriptsPath?: string | null;
   /** Использовать ли RAG (векторный поиск) вместо лексического поиска по базе знаний */
   useRag?: boolean | string | null;
+  /** Если задано — скрипт продаж из таблицы SalesScript (slug), иначе файл по salesScriptsPath */
+  salesScriptSlug?: string | null;
 }
 
 export interface ResolvedBotConfiguration {

@@ -3,7 +3,7 @@
 ## Project
 - Name: `ai-manager`
 - Goal: AI-менеджер для консультаций и продаж в чатах (Telegram, WhatsApp, др.)
-- Current stage: MVP core — входящие сообщения по умолчанию через **BullMQ** (быстрый ACK вебхука); при `DIALOG_QUEUE_ENABLED=false` — синхронная обработка в вебхуке без Redis.
+- Current stage: MVP core + **админ API** (JWT, CRUD конфигов/профилей/скриптов в БД, тест диалога) — входящие сообщения по умолчанию через **BullMQ** (быстрый ACK вебхука); при `DIALOG_QUEUE_ENABLED=false` — синхронная обработка в вебхуке без Redis.
 
 ## Implemented
 - Инициализирован backend-каркас (NestJS + TypeScript).
@@ -36,6 +36,12 @@
 - Режим **строгой базы знаний** в профиле промпта: `strictKnowledgeMode`, опциональный `scopeFile` (длинный текст в контекст LLM / индексация), `noKnowledgeReply` при отсутствии релевантных фрагментов.
 - **Разговорный обход** strict-режима (`strictKnowledgeConversationalBypass` в `config/prompt-profiles/*.json`): список regex-строк (флаг `u` при компиляции в `PromptProfileService`), `maxMessageLength`, опционально `strictKnowledgeConversationalPromptAddendum` — строки к system prompt. Дефолтные паттерны и текст доп. блока — `src/modules/prompt-profile/strict-knowledge-conversational.defaults.ts`. Важно: в JS **не использовать `\b` в паттернах под кириллицу** (word boundary только для ASCII-«слов»); при совпадении обхода поиск по БЗ для этого сообщения **не** вызывается, чтобы случайные чанки не тянули ответ «нет в базе».
 - Скрипты инфраструктуры: `npm run db:up` / `db:down` — `docker compose` для PostgreSQL и Redis. Подключение Prisma при старте: повторные попытки с паузой (`PRISMA_CONNECT_MAX_ATTEMPTS`, `PRISMA_CONNECT_RETRY_DELAY_MS`), чтобы пережить медленный старт контейнера.
+- **Админ API** (отдельно от вебхуков и очереди): модули `AdminModule`, `AuthModule`, `ConfigManagementModule` в `AppModule`. **JWT** (access + refresh): `POST /admin/auth/login`, `POST /admin/auth/refresh`; access в `Authorization: Bearer`; refresh хранится как SHA-256 в `AdminUser.refreshTokenHash`. Роли **`ADMIN`** / **`MANAGER`** (Prisma `AdminRole`); guard `AdminJwtAuthGuard` + `AdminRolesGuard`; удаление сущностей конфигов — только `ADMIN`.
+- **Prisma** (миграция `20260424120000_admin_and_config_management`): `AdminUser`, `Tenant` (заготовка под multi-tenant), `BotConfiguration`, `PromptProfile`, `SalesScript` — поля `data` типа JSON, `version`, `isActive`, опционально `tenantId`. Прод-бот по-прежнему использует таблицу **`User`** (клиенты каналов), не путать с админами.
+- **`ConfigManagementService`**: разрешение сборки для админки по `configurationId` (id или slug строки в БД; если записи нет — как имя файла `config/configurations/<id>.json`). Профиль: сначала строка `PromptProfile` в БД по slug = `llmPromptProfile`, иначе файл `config/prompt-profiles/<slug>.json`. Скрипты: при `salesScriptSlug` в JSON сборки — строка `SalesScript` в БД, иначе файл по `salesScriptsPath`. Опциональный кэш бандла: **`CONFIG_MGMT_CACHE_TTL_MS`** (мс; `0`/пусто — выкл.).
+- **`DialogService`**: для прод-каналов при старте собирается **`defaultSnapshot`** (те же sales / профиль / bot, что и раньше из env и файлов); `process()` ходит только по нему — латентность вебхуков не зависит от админки. Для админки: **`composeSnapshot`** + **`runDiagnosticTurn`** (один ход с диагностикой: system prompt, knowledge context, chunks, режим retrieval); вызывается из **`POST /admin/test-dialog`** (`message`, `configurationId`). Типы скриптов продаж вынесены в `src/modules/dialog/sales-script-config.types.ts`.
+- **REST админки** (все под JWT, кроме login/refresh): `GET|POST|PATCH|DELETE /admin/configurations`, `/admin/prompt-profiles`, `/admin/scripts`; валидация тела через **Zod** в контроллерах. В JSON сборки бота опционально **`salesScriptSlug`** (`BotConfigurationFileJson`); в JSON профиля для БД опционально **`scopeText`** (без `scopeFile`). Зависимости: `@nestjs/jwt`, `@nestjs/passport`, `passport-jwt`, `bcrypt`.
+- Переменные в **`.env.example`**: `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN`; в `NODE_ENV !== production` допустимы встроенные слабые секреты в коде (для локального старта) — в **production** секреты обязательны. Первого `AdminUser` нужно создать вручную (хеш пароля bcrypt + Prisma Studio / SQL); публичной регистрации нет.
 
 ## In Progress
 - Уточнение sales-FSM логики и A/B вариантов скриптов.
@@ -46,6 +52,7 @@
 3. Добавить уведомление менеджера при handoff событии.
 4. Добавить retry/backoff для неуспешной отправки сообщений в каналы.
 5. Добавить базовые метрики конверсии по этапам воронки.
+6. Админка: безопасный bootstrap первого пользователя (только dev или по одноразовому токену), ephemeral RAG для `/admin/test-dialog` при профиле, отличном от прод-индекса, уточнение прав `MANAGER` vs `ADMIN`.
 
 ## Architecture Decisions
 - Единый слой каналов: адаптеры для каждого мессенджера.
@@ -58,14 +65,18 @@
 - Хранение состояния и истории: PostgreSQL (через Prisma ORM).
 - Очереди: Redis + BullMQ — очередь входящих диалогов `dialog-inbound` (`DialogQueueModule`); опционально отдельный инстанс API с `DIALOG_QUEUE_WORKER_ENABLED=false` и выделенный воркер — по мере масштабирования.
 - `HealthModule` подключает `DialogQueueModule` для эндпоинта метрик очереди.
+- Админский контур **не** подменяет прод-конфиг: `BotConfigurationService` / вебхуки / воркер очереди по-прежнему читают **`BOT_CONFIGURATION`** и файлы на диске; БД-конфиги и CRUD — для панели и тестового прогона через `ConfigManagementService` + `runDiagnosticTurn`.
+- Multi-tenant: в схеме есть **`Tenant`** и nullable **`tenantId`** у `BotConfiguration` / `PromptProfile` / `SalesScript`; резолв по тенанту в коде пока не включён.
 
 ## Risks / Open Questions
 - Выбор провайдера для WhatsApp (официальный API vs BSP).
 - Требования по хранению персональных данных.
 - Границы полномочий AI и правила эскалации человеку.
 - Выбор финального поставщика LLM и политика контроля затрат.
+- Админ JWT: утечка refresh-токена, слабые секреты в production; тестовый диалог с **`useRag: true`** при несовпадении индекса `RagService` с выбранным профилем может давать нерепрезентативный retrieval (ограничение текущей реализации).
 
 ## Change Log
+- 2026-04-24: Админ-панель backend: `AdminModule` (CRUD `/admin/configurations`, `/admin/prompt-profiles`, `/admin/scripts`; `POST /admin/test-dialog`), `AuthModule` (JWT access/refresh, `AdminUser`, роли), `ConfigManagementModule` (разрешение бандла БД → файлы, опциональный кэш). Prisma: `AdminUser`, `Tenant`, `BotConfiguration`, `PromptProfile`, `SalesScript`; миграция `20260424120000_admin_and_config_management`. `DialogService`: `DialogRuntimeSnapshot`, `defaultSnapshot` для прод, `runDiagnosticTurn` для диагностики. `PromptProfileService`: `resolveFromPromptProfileJson`, `resolveProfileFromFilesystem`; в типах профиля — `scopeText`; в сборке бота — `salesScriptSlug`. `.env.example`: переменные JWT. После pull — `npx prisma migrate deploy`.
 - 2026-04-18: RAG (`RagModule`/`RagService`, `useRag` в конфиге бота); `DialogModule` импортирует `RagModule`. Режим консультанта по базе знаний: `strictKnowledgeMode`, разговорный обход без ложных отказов — паттерны в профиле или дефолты в `strict-knowledge-conversational.defaults.ts` (без `\b` для кириллицы; при обходе retrieval не вызывается). Смягчены тексты `noKnowledgeReply` / системного промпта при отсутствии фрагментов. Prisma: retry подключения к БД при старте; `npm run db:up` / `db:down`.
 - 2026-04-14: Добавлен «свободный режим» (`openTopicsMode`) для диалога на любые темы: новые `config/prompt-profiles/open-topics.json`, `config/configurations/open-topics.json`, `scripts/open-topics/sales-scripts.json`; обновлены `PromptProfileService`/типы и сборка системного промпта в `DialogService` (в open-topics без «рамки темы» и без блока sales-правил).
 - 2026-04-14: **Очередь входящих (BullMQ) в продакшен-пути**: `dialog-inbound`, `processInboundQueued`, `IdempotencyService.revert` при сбое enqueue; `jobId` без `:` (`telegram-…`, `whatsapp-…`); экспорт `TelegramService` / `WhatsAppService`; `GET /health/queue`; dev-логи очереди; `HealthModule` → `DialogQueueModule`. Docker Compose: убраны `version` и жёсткие `container_name`. Параметры в `.env.example`. (Запись от 2026-04-09 про «Redis без воркера» устарела.)

@@ -27,25 +27,23 @@ export class PromptProfileService implements OnModuleInit {
     return this.profile;
   }
 
-  private loadResolvedProfile(profileId: string): ResolvedLlmPromptProfile {
-    const filePath = path.resolve(
-      process.cwd(),
-      "config",
-      "prompt-profiles",
-      `${profileId}.json`,
-    );
-
-    let raw: PromptProfileFileJson = {};
+  /** Профиль из файла `config/prompt-profiles/<profileId>.json` (для ConfigManagement / админки). */
+  resolveProfileFromFilesystem(profileId: string): ResolvedLlmPromptProfile {
+    const filePath = path.resolve(process.cwd(), "config", "prompt-profiles", `${profileId}.json`);
     try {
       const content = readFileSync(filePath, "utf8");
-      raw = JSON.parse(content) as PromptProfileFileJson;
+      const raw = JSON.parse(content) as PromptProfileFileJson;
+      return this.resolveFromPromptProfileJson(profileId, raw);
     } catch (e) {
       this.logger.warn(
         `Prompt profile file missing or invalid (${filePath}), using minimal fallback: ${e instanceof Error ? e.message : String(e)}`,
       );
       return this.fallbackProfile(profileId);
     }
+  }
 
+  /** Профиль из JSON (БД или тело запроса). */
+  resolveFromPromptProfileJson(profileId: string, raw: PromptProfileFileJson): ResolvedLlmPromptProfile {
     const topic = typeof raw.topic === "string" ? raw.topic.trim() : undefined;
     const forbiddenTopics = Array.isArray(raw.forbiddenTopics)
       ? raw.forbiddenTopics.map((s) => String(s).trim()).filter(Boolean)
@@ -100,7 +98,9 @@ export class PromptProfileService implements OnModuleInit {
     const retrievalTopK = this.parseIntInRange(raw.retrievalTopK, 1, 20);
 
     let scopeText: string | undefined;
-    if (typeof raw.scopeFile === "string" && raw.scopeFile.trim().length > 0) {
+    if (typeof raw.scopeText === "string" && raw.scopeText.trim().length > 0) {
+      scopeText = raw.scopeText.trim();
+    } else if (typeof raw.scopeFile === "string" && raw.scopeFile.trim().length > 0) {
       scopeText = this.readScopeFile(raw.scopeFile.trim()) ?? undefined;
     }
 
@@ -176,6 +176,10 @@ export class PromptProfileService implements OnModuleInit {
       strictKnowledgeConversationalBypass,
       strictKnowledgeConversationalPromptAddendumLines,
     };
+  }
+
+  private loadResolvedProfile(profileId: string): ResolvedLlmPromptProfile {
+    return this.resolveProfileFromFilesystem(profileId);
   }
 
   private readScopeFile(relativeOrAbsolute: string): string | null {

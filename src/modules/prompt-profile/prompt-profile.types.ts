@@ -60,6 +60,8 @@ export interface PromptProfileFileJson {
   /** true / "true" в JSON — удобно при ручном редактировании */
   humanLikeMode?: boolean | string;
   openTopicsMode?: boolean | string;
+  /** Для записей из БД: сырое тело базы знаний без scopeFile */
+  scopeText?: string | null;
   scopeFile?: string | null;
   strictKnowledgeMode?: boolean | string;
   noKnowledgeReply?: string | null;
