@@ -12,7 +12,7 @@ export class AdminTestDialogService {
 
   async run(message: string, configurationId: string) {
     const bundle = await this.configManagement.resolveDialogResourceBundle(configurationId);
-    const snapshot = this.dialog.composeSnapshot(bundle.sales, bundle.profile, bundle.bot);
+    const snapshot = this.dialog.composeSnapshot(bundle.profile, bundle.bot);
     return this.dialog.runDiagnosticTurn(
       {
         channel: "telegram",

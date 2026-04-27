@@ -76,7 +76,6 @@ model Tenant {
   updatedAt         DateTime            @updatedAt
   botConfigurations BotConfiguration[]
   promptProfiles    PromptProfile[]
-  salesScripts      SalesScript[]
 }
 
 /// Сборка бота (аналог config/configurations/<slug>.json), хранение в БД для админки
@@ -94,18 +93,6 @@ model BotConfiguration {
 }
 
 model PromptProfile {
-  id        String   @id @default(cuid())
-  tenantId  String?
-  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  slug      String   @unique
-  data      Json
-  version   Int      @default(1)
-  isActive  Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model SalesScript {
   id        String   @id @default(cuid())
   tenantId  String?
   tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)

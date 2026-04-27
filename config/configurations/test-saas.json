@@ -1,4 +1,3 @@
 {
-  "llmPromptProfile": "test-saas",
-  "salesScriptsPath": "scripts/test-saas/sales-scripts.json"
+  "llmPromptProfile": "test-saas"
 }

@@ -18,7 +18,7 @@ export class BotConfigurationService implements OnModuleInit {
 
   onModuleInit(): void {
     this.logger.log(
-      `Bot configuration "${this.resolved.id}" → promptProfile="${this.resolved.llmPromptProfile}", salesScripts="${this.resolved.salesScriptsPath}", useRag=${this.resolved.useRag}`,
+      `Bot configuration "${this.resolved.id}" → promptProfile="${this.resolved.llmPromptProfile}", useRag=${this.resolved.useRag}`,
     );
   }
 
@@ -51,11 +51,6 @@ export class BotConfigurationService implements OnModuleInit {
       process.env.LLM_PROMPT_PROFILE?.trim() ??
       "default";
 
-    const salesScriptsPath =
-      (typeof raw.salesScriptsPath === "string" && raw.salesScriptsPath.trim().length > 0
-        ? raw.salesScriptsPath.trim()
-        : undefined) ?? "scripts/sales-scripts.json";
-
     const rawUseRag = raw.useRag;
     const useRag =
       rawUseRag === true ||
@@ -64,7 +59,6 @@ export class BotConfigurationService implements OnModuleInit {
     return {
       id: configurationId,
       llmPromptProfile,
-      salesScriptsPath,
       useRag,
     };
   }

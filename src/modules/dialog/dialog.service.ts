@@ -1,7 +1,5 @@
 import { Injectable, OnModuleInit } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { LlmChatMessage, LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { BotConfigurationService } from "../bot-configuration/bot-configuration.service";
@@ -19,11 +17,26 @@ import {
   DialogRuntimeSnapshot,
   KnowledgeChunkRuntime,
 } from "./dialog.types";
-import { SalesScriptsConfig } from "./sales-script-config.types";
+
+/** Шаблоны, если LLM выключен или недоступен. */
+const TEMPLATE_STAGES: Record<string, { replyLines: string[] }> = {
+  contact: {
+    replyLines: [
+      "Спасибо за сообщение!",
+      "Я помогу с консультацией и подбором решения.",
+      "Расскажите, пожалуйста, какая задача сейчас самая приоритетная?",
+    ],
+  },
+  qualification: {
+    replyLines: [
+      "Спасибо за обращение.",
+      "Правильно понял, что запрос такой: \"{clientText}\"?",
+    ],
+  },
+};
 
 @Injectable()
 export class DialogService implements OnModuleInit {
-  private readonly config: SalesScriptsConfig;
   private defaultSnapshot!: DialogRuntimeSnapshot;
 
   constructor(
@@ -32,31 +45,20 @@ export class DialogService implements OnModuleInit {
     private readonly promptProfile: PromptProfileService,
     private readonly botConfiguration: BotConfigurationService,
     private readonly ragService: RagService,
-  ) {
-    this.config = this.loadConfig();
-  }
+  ) {}
 
   onModuleInit() {
-    this.defaultSnapshot = this.composeSnapshot(
-      this.config,
-      this.promptProfile.getProfile(),
-      this.botConfiguration.get(),
-    );
+    this.defaultSnapshot = this.composeSnapshot(this.promptProfile.getProfile(), this.botConfiguration.get());
   }
 
   /**
    * Сборка снимка для админского теста или кастомного рантайма.
-   * Прод-путь использует defaultSnapshot из env/файлов на старте.
+   * Прод-путь использует defaultSnapshot из env и файлов профиля/сборки на старте.
    */
-  composeSnapshot(
-    sales: SalesScriptsConfig,
-    profile: ResolvedLlmPromptProfile,
-    bot: ResolvedBotConfiguration,
-  ): DialogRuntimeSnapshot {
+  composeSnapshot(profile: ResolvedLlmPromptProfile, bot: ResolvedBotConfiguration): DialogRuntimeSnapshot {
     const { prefix, suffix } = this.buildLlmSystemPromptStaticParts(profile);
     const knowledgeChunks = this.computeKnowledgeChunksForProfile(profile);
     return {
-      sales,
       profile,
       bot,
       llmSystemPromptPrefix: prefix,
@@ -80,28 +82,22 @@ export class DialogService implements OnModuleInit {
       },
     });
 
-    const handoffReason = this.detectHandoffReason(input.text, snapshot.sales);
-    const nextStage = handoffReason ? "handoff" : this.detectStage(input.text, conversation.stage, snapshot.sales);
-    const templateReply = this.buildReply(nextStage, input.text, snapshot.sales);
-    const { replyText, diagnostics } = handoffReason
-      ? {
-          replyText: this.buildHandoffReply(snapshot.sales),
-          diagnostics: this.emptyDiagnostics(snapshot),
-        }
-      : await this.tryLlmReplyWithDiagnostics(
-          conversation.id,
-          nextStage,
-          input.channel,
-          templateReply,
-          input.text,
-          snapshot,
-        );
+    const nextStage = conversation.stage;
+    const templateReply = this.buildReply(nextStage, input.text);
+    const { replyText, diagnostics } = await this.tryLlmReplyWithDiagnostics(
+      conversation.id,
+      nextStage,
+      input.channel,
+      templateReply,
+      input.text,
+      snapshot,
+    );
 
     await this.prisma.conversation.update({
       where: { id: conversation.id },
       data: {
         stage: nextStage,
-        status: handoffReason ? "HANDED_OFF" : "ACTIVE",
+        status: "ACTIVE",
       },
     });
 
@@ -112,15 +108,6 @@ export class DialogService implements OnModuleInit {
         text: replyText,
       },
     });
-
-    if (handoffReason) {
-      await this.prisma.handoffEvent.create({
-        data: {
-          conversationId: conversation.id,
-          reason: handoffReason,
-        },
-      });
-    }
 
     return { replyText, stage: nextStage, diagnostics };
   }
@@ -140,19 +127,21 @@ export class DialogService implements OnModuleInit {
       },
     });
 
-    const handoffReason = this.detectHandoffReason(input.text, snap.sales);
-    const nextStage = handoffReason
-      ? "handoff"
-      : this.detectStage(input.text, conversation.stage, snap.sales);
-    const templateReply = this.buildReply(nextStage, input.text, snap.sales);
-    const replyText = handoffReason
-      ? this.buildHandoffReply(snap.sales)
-      : await this.tryLlmReply(conversation.id, nextStage, input.channel, templateReply, input.text, snap);
+    const nextStage = conversation.stage;
+    const templateReply = this.buildReply(nextStage, input.text);
+    const replyText = await this.tryLlmReply(
+      conversation.id,
+      nextStage,
+      input.channel,
+      templateReply,
+      input.text,
+      snap,
+    );
     await this.prisma.conversation.update({
       where: { id: conversation.id },
       data: {
         stage: nextStage,
-        status: handoffReason ? "HANDED_OFF" : "ACTIVE",
+        status: "ACTIVE",
       },
     });
 
@@ -163,15 +152,6 @@ export class DialogService implements OnModuleInit {
         text: replyText,
       },
     });
-
-    if (handoffReason) {
-      await this.prisma.handoffEvent.create({
-        data: {
-          conversationId: conversation.id,
-          reason: handoffReason,
-        },
-      });
-    }
 
     return { replyText, stage: nextStage };
   }
@@ -222,35 +202,10 @@ export class DialogService implements OnModuleInit {
     }
   }
 
-  private detectStage(text: string, currentStage: string, sales: SalesScriptsConfig): string {
-    const normalized = text.toLowerCase();
-    for (const rule of sales.rules) {
-      const matched = rule.containsAny.some((word) => normalized.includes(word));
-      if (matched) {
-        return rule.setStage;
-      }
-    }
-    if (currentStage === sales.defaultStage) {
-      return "qualification";
-    }
-    return currentStage;
-  }
-
-  private buildReply(stage: string, clientText: string, sales: SalesScriptsConfig): string {
-    const fallback = sales.stages[sales.defaultStage];
-    const selected = sales.stages[stage] ?? fallback;
+  private buildReply(stage: string, clientText: string): string {
+    const fallback = TEMPLATE_STAGES.contact;
+    const selected = TEMPLATE_STAGES[stage] ?? fallback;
     return selected.replyLines.map((line) => line.replace("{clientText}", clientText)).join("\n");
-  }
-
-  private detectHandoffReason(text: string, sales: SalesScriptsConfig): string | null {
-    const normalized = text.toLowerCase();
-    for (const rule of sales.handoff?.handOffTriggers ?? []) {
-      const matched = rule.containsAny.some((word) => normalized.includes(word));
-      if (matched) {
-        return rule.reason;
-      }
-    }
-    return null;
   }
 
   /**
@@ -556,17 +511,6 @@ export class DialogService implements OnModuleInit {
     return Math.min(50, Math.max(2, Math.floor(n)));
   }
 
-  private buildHandoffReply(sales: SalesScriptsConfig): string {
-    const lines = sales.handoff?.replyLines;
-    if (!lines || lines.length === 0) {
-      return [
-        "Передаю ваш запрос профильному менеджеру, чтобы дать максимально точный ответ.",
-        "Оставайтесь на связи, пожалуйста.",
-      ].join("\n");
-    }
-    return lines.join("\n");
-  }
-
   private buildKnowledgeChunks(scopeText: string, chunkSize: number, overlap: number): KnowledgeChunkRuntime[] {
     const normalized = scopeText.replace(/\r\n/g, "\n").trim();
     if (!normalized) {
@@ -690,46 +634,5 @@ export class DialogService implements OnModuleInit {
       "подпункт",
     ]);
     return raw.filter((t) => !stopWords.has(t));
-  }
-
-  private loadConfig(): SalesScriptsConfig {
-    const fallback: SalesScriptsConfig = {
-      defaultStage: "contact",
-      nextAction: "await_client_reply",
-      handoff: {
-        nextAction: "await_human_manager",
-        replyLines: [
-          "Передаю ваш запрос профильному менеджеру, чтобы дать максимально точный ответ.",
-          "Оставайтесь на связи, пожалуйста.",
-        ],
-        handOffTriggers: [],
-      },
-      stages: {
-        contact: {
-          replyLines: [
-            "Спасибо за сообщение!",
-            "Я помогу с консультацией и подбором решения.",
-            "Расскажите, пожалуйста, какая задача сейчас самая приоритетная?",
-          ],
-        },
-        qualification: {
-          replyLines: [
-            "Спасибо за обращение.",
-            "Правильно понял, что запрос такой: \"{clientText}\"?",
-            "Подскажите, пожалуйста, срок и желаемый бюджет, чтобы предложить лучший вариант.",
-          ],
-        },
-      },
-      rules: [],
-    };
-
-    try {
-      const relative = this.botConfiguration.get().salesScriptsPath;
-      const configPath = path.resolve(process.cwd(), relative);
-      const content = readFileSync(configPath, "utf8");
-      return JSON.parse(content) as SalesScriptsConfig;
-    } catch {
-      return fallback;
-    }
   }
 }

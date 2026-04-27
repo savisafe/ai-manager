@@ -1,4 +1,3 @@
 {
-  "llmPromptProfile": "daria-mokko",
-  "salesScriptsPath": "scripts/daria-mokko/sales-scripts.json"
+  "llmPromptProfile": "daria-mokko"
 }

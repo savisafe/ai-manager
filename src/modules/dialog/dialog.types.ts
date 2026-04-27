@@ -1,6 +1,5 @@
 import type { ResolvedBotConfiguration } from "../bot-configuration/bot-configuration.types";
 import type { ResolvedLlmPromptProfile } from "../prompt-profile/prompt-profile.types";
-import type { SalesScriptsConfig } from "./sales-script-config.types";
 
 export type ChannelType = "telegram" | "whatsapp";
 
@@ -23,7 +22,6 @@ export interface KnowledgeChunkRuntime {
 
 /** Снимок ресурсов диалога для одного запуска (прод: дефолт из env/файлов; админ: из БД/файлов). */
 export interface DialogRuntimeSnapshot {
-  sales: SalesScriptsConfig;
   profile: ResolvedLlmPromptProfile;
   bot: ResolvedBotConfiguration;
   llmSystemPromptPrefix: string;

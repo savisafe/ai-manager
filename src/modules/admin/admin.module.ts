@@ -6,7 +6,6 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { AdminRolesGuard } from "../auth/roles.guard";
 import { AdminConfigurationsController } from "./admin-configurations.controller";
 import { AdminPromptProfilesController } from "./admin-prompt-profiles.controller";
-import { AdminSalesScriptsController } from "./admin-sales-scripts.controller";
 import { AdminTestDialogController } from "./admin-test-dialog.controller";
 import { AdminTestDialogService } from "./admin-test-dialog.service";
 
@@ -15,7 +14,6 @@ import { AdminTestDialogService } from "./admin-test-dialog.service";
   controllers: [
     AdminConfigurationsController,
     AdminPromptProfilesController,
-    AdminSalesScriptsController,
     AdminTestDialogController,
   ],
   providers: [AdminTestDialogService, AdminRolesGuard],

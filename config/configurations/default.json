@@ -1,4 +1,3 @@
 {
-  "llmPromptProfile": "default",
-  "salesScriptsPath": "scripts/sales-scripts.json"
+  "llmPromptProfile": "default"
 }

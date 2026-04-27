@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { Prisma } from "@prisma/client";
@@ -9,7 +9,6 @@ import {
 } from "../bot-configuration/bot-configuration.types";
 import { PromptProfileService } from "../prompt-profile/prompt-profile.service";
 import { PromptProfileFileJson, ResolvedLlmPromptProfile } from "../prompt-profile/prompt-profile.types";
-import { SalesScriptsConfig } from "../dialog/sales-script-config.types";
 import { ResolvedDialogResourceBundle } from "./config-management.types";
 
 type BundleCacheEntry = { expiresAt: number; value: ResolvedDialogResourceBundle };
@@ -35,7 +34,6 @@ export class ConfigManagementService {
   /**
    * Разрешает сборку бота по id/slug строки в БД или, если записи нет, по имени файла config/configurations/<id>.json.
    * Профиль: сначала Prisma PromptProfile по slug = llmPromptProfile, иначе JSON с диска.
-   * Скрипт: salesScriptSlug → Prisma SalesScript; иначе файл salesScriptsPath.
    */
   async resolveDialogResourceBundle(configurationId: string): Promise<ResolvedDialogResourceBundle> {
     const ttlMs = this.getCacheTtlMs();
@@ -49,9 +47,8 @@ export class ConfigManagementService {
 
     const { bot, raw } = await this.loadBotConfigurationPayload(configurationId);
     const profile = await this.resolvePromptProfile(bot.llmPromptProfile, raw);
-    const sales = await this.resolveSalesScripts(bot, raw);
 
-    const bundle: ResolvedDialogResourceBundle = { bot, profile, sales };
+    const bundle: ResolvedDialogResourceBundle = { bot, profile };
     if (ttlMs > 0) {
       this.cache.set(cacheKey, { expiresAt: Date.now() + ttlMs, value: bundle });
     }
@@ -114,11 +111,6 @@ export class ConfigManagementService {
       process.env.LLM_PROMPT_PROFILE?.trim() ??
       "default";
 
-    const salesScriptsPath =
-      (typeof raw.salesScriptsPath === "string" && raw.salesScriptsPath.trim().length > 0
-        ? raw.salesScriptsPath.trim()
-        : undefined) ?? "scripts/sales-scripts.json";
-
     const rawUseRag = raw.useRag;
     const useRag =
       rawUseRag === true || (typeof rawUseRag === "string" && rawUseRag.trim().toLowerCase() === "true");
@@ -126,7 +118,6 @@ export class ConfigManagementService {
     return {
       id: resolvedId,
       llmPromptProfile,
-      salesScriptsPath,
       useRag,
     };
   }
@@ -141,83 +132,6 @@ export class ConfigManagementService {
       return this.promptProfileService.resolveFromPromptProfileJson(profileSlug, raw);
     }
     return this.promptProfileService.resolveProfileFromFilesystem(profileSlug);
-  }
-
-  private async resolveSalesScripts(
-    bot: ResolvedBotConfiguration,
-    botRaw: BotConfigurationFileJson,
-  ): Promise<SalesScriptsConfig> {
-    const slug =
-      typeof botRaw.salesScriptSlug === "string" && botRaw.salesScriptSlug.trim().length > 0
-        ? botRaw.salesScriptSlug.trim()
-        : undefined;
-    if (slug) {
-      const row = await this.prisma.salesScript.findUnique({ where: { slug } });
-      if (!row) {
-        throw new NotFoundException(`SalesScript slug not found: ${slug}`);
-      }
-      return this.parseSalesScripts(row.data);
-    }
-    return this.loadSalesFromFilesystem(bot.salesScriptsPath);
-  }
-
-  private loadSalesFromFilesystem(relativePath: string): SalesScriptsConfig {
-    try {
-      const configPath = path.resolve(process.cwd(), relativePath);
-      const content = readFileSync(configPath, "utf8");
-      return this.parseSalesScripts(JSON.parse(content));
-    } catch (e) {
-      this.logger.warn(`Sales script file read failed (${relativePath}): ${e instanceof Error ? e.message : String(e)}`);
-      return this.fallbackSalesScripts();
-    }
-  }
-
-  private parseSalesScripts(json: unknown): SalesScriptsConfig {
-    const fallback = this.fallbackSalesScripts();
-    if (!json || typeof json !== "object") {
-      return fallback;
-    }
-    const o = json as Record<string, unknown>;
-    const defaultStage = typeof o.defaultStage === "string" ? o.defaultStage : fallback.defaultStage;
-    const nextAction = typeof o.nextAction === "string" ? o.nextAction : fallback.nextAction;
-    const stages =
-      o.stages && typeof o.stages === "object" ? (o.stages as SalesScriptsConfig["stages"]) : fallback.stages;
-    const rules = Array.isArray(o.rules) ? (o.rules as SalesScriptsConfig["rules"]) : fallback.rules;
-    const handoff =
-      o.handoff && typeof o.handoff === "object" ? (o.handoff as SalesScriptsConfig["handoff"]) : fallback.handoff;
-    return { defaultStage, nextAction, stages, rules, handoff };
-  }
-
-  private fallbackSalesScripts(): SalesScriptsConfig {
-    return {
-      defaultStage: "contact",
-      nextAction: "await_client_reply",
-      handoff: {
-        nextAction: "await_human_manager",
-        replyLines: [
-          "Передаю ваш запрос профильному менеджеру, чтобы дать максимально точный ответ.",
-          "Оставайтесь на связи, пожалуйста.",
-        ],
-        handOffTriggers: [],
-      },
-      stages: {
-        contact: {
-          replyLines: [
-            "Спасибо за сообщение!",
-            "Я помогу с консультацией и подбором решения.",
-            "Расскажите, пожалуйста, какая задача сейчас самая приоритетная?",
-          ],
-        },
-        qualification: {
-          replyLines: [
-            "Спасибо за обращение.",
-            "Правильно понял, что запрос такой: \"{clientText}\"?",
-            "Подскажите, пожалуйста, срок и желаемый бюджет, чтобы предложить лучший вариант.",
-          ],
-        },
-      },
-      rules: [],
-    };
   }
 
   private asJsonObject(value: Prisma.JsonValue): Record<string, unknown> {
