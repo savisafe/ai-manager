@@ -1,6 +1,6 @@
 # AI Manager
 
-Backend для AI-менеджера в чатах: **Telegram** и **WhatsApp** (webhook), общая диалоговая логика (`DialogService`), сохранение истории в **PostgreSQL**, опционально **локальная LLM через Ollama**. Если LLM выключена или недоступна, используются короткие встроенные текстовые шаблоны в коде (не отдельные JSON-файлы).
+Backend для AI-менеджера в чатах: **Telegram** и **WhatsApp** (webhook), общая диалоговая логика (`DialogService`), сохранение истории в **PostgreSQL**, опционально **локальная LLM** через провайдер с OpenAI-совместимым API (**Ollama**, **LM Studio** и т.п.). Если LLM выключена или недоступна, используются короткие встроенные текстовые шаблоны в коде (не отдельные JSON-файлы).
 
 Текущий статус разработки: [DEVELOPMENT_CONTEXT.md](DEVELOPMENT_CONTEXT.md).
 
@@ -11,7 +11,7 @@ Backend для AI-менеджера в чатах: **Telegram** и **WhatsApp**
 - **Node.js** 20+ (LTS)
 - **Docker** и **Docker Compose** (для PostgreSQL)
 - **ngrok** (или другой HTTPS-туннель) — для Telegram/WhatsApp webhook с локальной машины
-- **Ollama** — если включена генерация ответов через LLM (`LLM_ENABLED=true`)
+- **Ollama** или **LM Studio** (локальный сервер с `…/v1/chat/completions`) — если включена генерация через LLM (`LLM_ENABLED=true`)
 
 ---
 
@@ -175,7 +175,11 @@ WHATSAPP_APP_SECRET=<App Secret из настроек приложения Meta>
 
 ---
 
-## Локальная LLM (Ollama)
+## Локальная LLM (Ollama, LM Studio)
+
+`LlmService` ходит в **`POST {LLM_BASE_URL}/chat/completions`** (OpenAI-совместимый путь). Имя модели **не задаётся в `.env`**: при старте первого запроса выполняется **`GET {LLM_BASE_URL}/models`**, берётся **первая запись в `data[]`, у которой `id` не похож на embedding** (строка `embed` в id пропускается — чтобы не выбрать `text-embedding-…` рядом с чат-моделью). Заголовок запросов: `Authorization: Bearer local` (для локальных серверов достаточно фиктивного значения).
+
+### Ollama
 
 1. Установи [Ollama](https://ollama.com), скачай модель:
 
@@ -183,40 +187,61 @@ WHATSAPP_APP_SECRET=<App Secret из настроек приложения Meta>
 ollama pull llama3:latest
 ```
 
-2. Проверка API:
+2. Проверка, что модель видна:
 
 ```bash
 curl -s http://127.0.0.1:11434/api/tags
 ```
 
-Список моделей не должен быть пустым.
+Список не должен быть пустым.
 
-3. В `.env`:
+3. В `.env` укажи базовый URL API (у Ollama это порт **11434**, суффикс **`/v1`**):
 
 ```env
 LLM_ENABLED=true
 LLM_BASE_URL=http://127.0.0.1:11434/v1
-LLM_MODEL=llama3:latest
-LLM_API_KEY=ollama
 LLM_TEMPERATURE=0.35
-LLM_MAX_TOKENS=400
+LLM_MAX_TOKENS=2048
 ```
 
-4. **Сборка бота** (какая ниша и какие файлы подключать) — переменная **`BOT_CONFIGURATION`** и JSON [config/configurations/](../config/configurations/):
+### LM Studio
 
-   - В `.env`: `BOT_CONFIGURATION=daria-mokko` (или `default`, `test-saas`, `test-fitness` и т.д.).
-   - Файл `config/configurations/<имя>.json` задаёт **`llmPromptProfile`** (имя без `.json` из каталога профилей) и опционально **`useRag`** (векторный поиск по базе знаний вместо лексического).
-   - После смены значения нужен **перезапуск** приложения.
+1. В LM Studio включи **Local Server** (например порт **1234**).
+2. Загрузи чат-модель в память (Developer → Load); иначе провайдер вернёт ошибку вида «No models loaded».
+3. В `.env`:
 
-5. **Профиль промпта** (рамка темы, компания, persona, цели, запреты, `humanLikeMode`, опционально `scopeFile`) — JSON в [config/prompt-profiles/](../config/prompt-profiles/):
+```env
+LLM_ENABLED=true
+LLM_BASE_URL=http://127.0.0.1:1234/v1
+LLM_TEMPERATURE=0.35
+LLM_MAX_TOKENS=2048
+```
 
-   - Идентификатор профиля берётся из **`llmPromptProfile`** в активной сборке; если там не задан — используется fallback **`LLM_PROMPT_PROFILE`** (например `default` → `config/prompt-profiles/default.json`).
-   - Новый бренд: добавь `config/prompt-profiles/my-brand.json`, затем создай или скопируй `config/configurations/my-brand.json` с `"llmPromptProfile": "my-brand"` (и при необходимости `"useRag": true`).
-   - Длинные факты о продукте: поле `"scopeFile": "config/llm-scope.txt"` в JSON профиля; шаблон: [config/llm-scope.example.txt](../config/llm-scope.example.txt).
+Убедись, что **`GET {LLM_BASE_URL}/models`** возвращает нужную чат-модель **раньше** embedding-моделей (или что embedding имеет `embed` в id — тогда она будет пропущена при выборе).
 
-   Пример профиля без scope: `config/prompt-profiles/minimal.json`.
+### Лимит токенов и модели с «reasoning»
 
-Если `LLM_ENABLED=false` или Ollama недоступна, ответы идут из **встроенных шаблонов** в `DialogService` (короткие фразы для стадий `contact` / `qualification` в зависимости от `conversation.stage` в БД).
+У части моделей (например **Gemma 4** в LM Studio) ответ разбивается на скрытое **`reasoning_content`** и видимое **`content`**. Если **`LLM_MAX_TOKENS`** слишком мал, весь лимит уходит в reasoning, **`content` остаётся пустым**, `finish_reason` становится **`length`** — бэкенд не подставляет reasoning в чат пользователю и уходит во **встроенные шаблоны**. В `.env.example` задан разумный пример (**2048**); если переменная **не задана**, в коде используется то же значение по умолчанию. При необходимости увеличь лимит или уменьши «thinking» в настройках провайдера.
+
+### Сборка бота
+
+Какая ниша и какие файлы подключать — переменная **`BOT_CONFIGURATION`** и JSON [config/configurations/](../config/configurations/):
+
+- В `.env`: `BOT_CONFIGURATION=daria-mokko` (или `default`, `test-saas`, `test-fitness` и т.д.).
+- Файл `config/configurations/<имя>.json` задаёт **`llmPromptProfile`** (имя без `.json` из каталога профилей) и опционально **`useRag`** (векторный поиск по базе знаний вместо лексического).
+- После смены значения нужен **перезапуск** приложения.
+
+### Профиль промпта
+
+Рамка темы, компания, persona, цели, запреты, `humanLikeMode`, опционально `scopeFile` — JSON в [config/prompt-profiles/](../config/prompt-profiles/):
+
+- Идентификатор профиля берётся из **`llmPromptProfile`** в активной сборке; если там не задан — используется fallback **`LLM_PROMPT_PROFILE`** (например `default` → `config/prompt-profiles/default.json`).
+- Новый бренд: добавь `config/prompt-profiles/my-brand.json`, затем создай или скопируй `config/configurations/my-brand.json` с `"llmPromptProfile": "my-brand"` (и при необходимости `"useRag": true`).
+- Длинные факты о продукте: поле `"scopeFile": "config/llm-scope.txt"` в JSON профиля; шаблон: [config/llm-scope.example.txt](../config/llm-scope.example.txt).
+
+Пример профиля без scope: `config/prompt-profiles/minimal.json`.
+
+Если `LLM_ENABLED=false` или провайдер LLM недоступен, ответы идут из **встроенных шаблонов** в `DialogService` (короткие фразы для стадий `contact` / `qualification` в зависимости от `conversation.stage` в БД).
 
 Сообщение `listen tcp 127.0.0.1:11434: address already in use` означает, что Ollama **уже запущена** — второй раз `ollama serve` не нужен.
 
@@ -258,8 +283,10 @@ LLM_MAX_TOKENS=400
 | `404` в `last_error_message` у Telegram | В webhook указан только корень ngrok без пути `/webhooks/telegram` |
 | Сменился URL ngrok | Обновить `TELEGRAM_WEBHOOK_URL` и снова `npm run telegram:webhook:set` |
 | Ollama: `models: []` | Выполнить `ollama pull <модель>` |
-| Ответы «шаблонные», не LLM | `LLM_ENABLED=true`, верный `LLM_MODEL`, Ollama доступна с машины, где крутится Node |
-| Долгий этап `2/3 dialog` (десятки секунд) | Локальный инференс: меньшая модель (`LLM_MODEL`, напр. `llama3.2:3b`), GPU/Metal у Ollama, меньше `LLM_MAX_TOKENS`, меньше `LLM_CONTEXT_MESSAGES`, короче системный промпт/`scopeFile`; облачный API быстрее CPU |
+| LM Studio: «No models loaded» | Загрузить модель в Developer / `lms load`; дождаться Ready |
+| Ответы «шаблонные», не LLM | `LLM_ENABLED=true`, с машины с Node доступен `LLM_BASE_URL` (тот же хост/порт, что у сервера LLM); `GET …/models` не пустой; для reasoning-моделей — достаточно большой `LLM_MAX_TOKENS` (см. раздел выше) |
+| Пустой ответ LLM, в логах провайдера пустой `content`, полный `reasoning_content`, `finish_reason: length` | Увеличить `LLM_MAX_TOKENS` (например 2048+) или снизить объём reasoning в LM Studio |
+| Долгий этап `2/3 dialog` (десятки секунд) | Локальный инференс: меньшая/быстрее квантованная модель, GPU/Metal, меньше `LLM_MAX_TOKENS`, меньше `LLM_CONTEXT_MESSAGES`, короче системный промпт/`scopeFile`; облачный API быстрее CPU |
 | Ошибки БД | `docker compose up -d postgres`, корректный `DATABASE_URL`, выполнены миграции |
 
 ---
