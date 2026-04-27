@@ -1,8 +1,8 @@
 # AI Manager
 
-Backend для AI-менеджера в чатах: **Telegram** и **WhatsApp** (webhook), общая диалоговая логика, скрипты продаж из JSON, сохранение истории в **PostgreSQL**, опционально **локальная LLM через Ollama**.
+Backend для AI-менеджера в чатах: **Telegram** и **WhatsApp** (webhook), общая диалоговая логика (`DialogService`), сохранение истории в **PostgreSQL**, опционально **локальная LLM через Ollama**. Если LLM выключена или недоступна, используются короткие встроенные текстовые шаблоны в коде (не отдельные JSON-файлы).
 
-Подробности промпта и плана развития: [PROMPT_PLAN.md](PROMPT_PLAN.md). Текущий статус разработки: [DEVELOPMENT_CONTEXT.md](DEVELOPMENT_CONTEXT.md).
+Текущий статус разработки: [DEVELOPMENT_CONTEXT.md](DEVELOPMENT_CONTEXT.md).
 
 ---
 
@@ -205,18 +205,18 @@ LLM_MAX_TOKENS=400
 4. **Сборка бота** (какая ниша и какие файлы подключать) — переменная **`BOT_CONFIGURATION`** и JSON [config/configurations/](../config/configurations/):
 
    - В `.env`: `BOT_CONFIGURATION=daria-mokko` (или `default`, `test-saas`, `test-fitness` и т.д.).
-   - Файл `config/configurations/<имя>.json` задаёт **`llmPromptProfile`** (имя без `.json` из каталога профилей) и **`salesScriptsPath`** (путь к JSON скриптов продаж от корня репозитория, например `scripts/daria-mokko/sales-scripts.json`).
+   - Файл `config/configurations/<имя>.json` задаёт **`llmPromptProfile`** (имя без `.json` из каталога профилей) и опционально **`useRag`** (векторный поиск по базе знаний вместо лексического).
    - После смены значения нужен **перезапуск** приложения.
 
 5. **Профиль промпта** (рамка темы, компания, persona, цели, запреты, `humanLikeMode`, опционально `scopeFile`) — JSON в [config/prompt-profiles/](../config/prompt-profiles/):
 
    - Идентификатор профиля берётся из **`llmPromptProfile`** в активной сборке; если там не задан — используется fallback **`LLM_PROMPT_PROFILE`** (например `default` → `config/prompt-profiles/default.json`).
-   - Новый бренд: добавь `config/prompt-profiles/my-brand.json`, затем создай или скопируй `config/configurations/my-brand.json` с `"llmPromptProfile": "my-brand"` и нужным `salesScriptsPath`.
+   - Новый бренд: добавь `config/prompt-profiles/my-brand.json`, затем создай или скопируй `config/configurations/my-brand.json` с `"llmPromptProfile": "my-brand"` (и при необходимости `"useRag": true`).
    - Длинные факты о продукте: поле `"scopeFile": "config/llm-scope.txt"` в JSON профиля; шаблон: [config/llm-scope.example.txt](../config/llm-scope.example.txt).
 
    Пример профиля без scope: `config/prompt-profiles/minimal.json`.
 
-Если `LLM_ENABLED=false` или Ollama недоступна, ответы идут из **шаблонов** в JSON по пути `salesScriptsPath` из текущей сборки (не обязательно [scripts/sales-scripts.json](../scripts/sales-scripts.json)).
+Если `LLM_ENABLED=false` или Ollama недоступна, ответы идут из **встроенных шаблонов** в `DialogService` (короткие фразы для стадий `contact` / `qualification` в зависимости от `conversation.stage` в БД).
 
 Сообщение `listen tcp 127.0.0.1:11434: address already in use` означает, что Ollama **уже запущена** — второй раз `ollama serve` не нужен.
 
@@ -276,5 +276,6 @@ docker compose up -d redis
 
 ## Документы проекта
 
-- [docs/BOT_ALGORITHM.md](BOT_ALGORITHM.md) — алгоритм от сообщения пользователя до ответа (webhook, БД, LLM)
 - [DEVELOPMENT_CONTEXT.md](DEVELOPMENT_CONTEXT.md) — что сделано и что дальше
+
+**Поток одного входящего сообщения (упрощённо):** вебхук Telegram/WhatsApp → (опционально) постановка job в **BullMQ** → `DialogService`: запись сообщения в БД → контекст из истории + профиль промпта → вызов LLM или встроенный шаблон → запись ответа и отправка в канал. Сборка бота и профиль читаются из `BOT_CONFIGURATION` и `config/` на диске; админка может тестировать другую конфигурацию через `POST /admin/test-dialog` и `ConfigManagementService` (без отдельного слоя sales-scripts).
